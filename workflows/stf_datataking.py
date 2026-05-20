@@ -22,6 +22,35 @@ class WorkflowExecutor:
                 # Merge this parameter section (later sections override earlier ones)
                 self.daq = {**self.daq, **section_values}
 
+        # Optionally load an explicit file list (overrides synthetic STF name generation)
+        input_file_list = self.daq.get('input_file_list')
+        self._file_list = self._load_file_list(input_file_list) if input_file_list else []
+
+    @staticmethod
+    def _load_file_list(path):
+        """Load STF filenames from a file.
+
+        Each non-empty, non-comment line may be either:
+            <filename>
+            <filename> <total_tfs>
+
+        Lines beginning with '#' are treated as comments and ignored.
+
+        Returns:
+            List of (filename, total_tfs_or_None) tuples.
+        """
+        entries = []
+        with open(path, 'r') as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                filename = parts[0]
+                total_tfs = int(parts[1]) if len(parts) >= 2 else None
+                entries.append((filename, total_tfs))
+        return entries
+
     def execute(self, env):
         # Generate run ID for this execution
         from swf_common_lib.api_utils import get_next_run_number
@@ -76,28 +105,36 @@ class WorkflowExecutor:
 
     def generate_stfs_during_physics(self, env, duration_seconds):
         interval = self.daq['stf_interval']
-        stf_count = self.daq.get('stf_count')
 
-        if stf_count:
-            # Count-based: generate exactly stf_count files
-            for i in range(stf_count):
-                yield from self.generate_single_stf(env)
-                if i < stf_count - 1:  # Don't wait after last STF
+        if self._file_list:
+            # File-list mode: emit one STF per entry, respecting the interval between them
+            for i, (filename, total_tfs) in enumerate(self._file_list):
+                yield from self.generate_single_stf(env, filename=filename, total_tfs=total_tfs)
+                if i < len(self._file_list) - 1:
                     yield env.timeout(interval)
         else:
-            # Duration-based: generate STFs for physics_period_duration
-            start_time = env.now
-            while (env.now - start_time) < duration_seconds:
-                yield from self.generate_single_stf(env)
-                if (env.now - start_time) < duration_seconds:
-                    yield env.timeout(interval)
+            stf_count = self.daq.get('stf_count')
 
-    def generate_single_stf(self, env):
+            if stf_count:
+                # Count-based: generate exactly stf_count files
+                for i in range(stf_count):
+                    yield from self.generate_single_stf(env)
+                    if i < stf_count - 1:  # Don't wait after last STF
+                        yield env.timeout(interval)
+            else:
+                # Duration-based: generate STFs for physics_period_duration
+                start_time = env.now
+                while (env.now - start_time) < duration_seconds:
+                    yield from self.generate_single_stf(env)
+                    if (env.now - start_time) < duration_seconds:
+                        yield env.timeout(interval)
+
+    def generate_single_stf(self, env, filename=None, total_tfs=None):
         self.stf_sequence += 1
-        stf_filename = f"swf.{self.run_id}.{self.stf_sequence:06d}.stf"
+        stf_filename = filename if filename else f"swf.{self.run_id}.{self.stf_sequence:06d}.stf"
 
         # Broadcast STF generation
-        yield env.process(self.broadcast_stf_gen(env, stf_filename))
+        yield env.process(self.broadcast_stf_gen(env, stf_filename, total_tfs=total_tfs))
 
         generation_time = self.daq['stf_generation_time']
         yield env.timeout(generation_time)
@@ -248,7 +285,7 @@ class WorkflowExecutor:
         )
         yield env.timeout(0.1)
 
-    def broadcast_stf_gen(self, env, stf_filename):
+    def broadcast_stf_gen(self, env, stf_filename, total_tfs=None):
         """Broadcast STF generation."""
         from datetime import datetime
 
@@ -265,6 +302,8 @@ class WorkflowExecutor:
             "state": "run",
             "substate": "physics"
         }
+        if total_tfs is not None:
+            message["total_tfs"] = total_tfs
 
         destination = '/topic/epictopic'
         self.runner.send_message(destination, message)
