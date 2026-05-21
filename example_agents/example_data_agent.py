@@ -270,13 +270,14 @@ class DataAgent(BaseAgent):
         state = message_data.get('state')
         substate = message_data.get('substate')
         sequence = message_data.get('sequence')
+        tf_count = message_data.get('tf_count')
 
         self.logger.info("Processing STF file",
                         extra=self._log_extra(stf_filename=filename, size_bytes=size_bytes,
                                              simulation_tick=message_data.get('simulation_tick')))
 
         # Register STF file and workflow with monitor
-        self.register_stf_file(run_id, filename, size_bytes, start, end, state, substate, sequence)
+        self.register_stf_file(run_id, filename, size_bytes, start, end, state, substate, sequence, tf_count)
         
         # TODO: Register STF file with Rucio
         # TODO: Initiate transfer to E1 facilities  
@@ -295,6 +296,7 @@ class DataAgent(BaseAgent):
             "file_url": file_url,
             "checksum": checksum,
             "size_bytes": size_bytes,
+            "tf_count": tf_count,
             "start": start,
             "end": end,
             "state": state,
