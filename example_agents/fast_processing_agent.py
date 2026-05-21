@@ -369,7 +369,8 @@ class FastProcessingAgent(BaseAgent):
             'execution_id': self.current_execution_id,
             'target_worker_count': self.workflow_params.get("fast_processing", {}).get('target_worker_count', 0),
             'stf_sampling_rate': self.workflow_params.get("fast_processing", {}).get('stf_sampling_rate', 0),
-            'slices_per_sample': self.workflow_params.get("fast_processing", {}).get('slices_per_sample', 0)
+            'slices_per_sample': self.workflow_params.get("fast_processing", {}).get('slices_per_sample', 0),
+            'no_duplicate_mode': self.workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
         })
 
         # Build and broadcast a run_imminent message to workers
@@ -685,6 +686,19 @@ class FastProcessingAgent(BaseAgent):
 
             # Create in database
             try:
+                no_duplicate_mode = self.workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
+                existing = self.call_monitor_api('GET', f'/tf-slices/?tf_filename={slice_filename}&slice_id={i}')
+                if existing:
+                    match = next((r for r in existing
+                                  if r.get('tf_filename') == slice_filename and r.get('slice_id') == i), None)
+                    if match:
+                        self.logger.info(f"TFSlice {slice_filename} slice_id={i} already exists with ID {match.get('id')}, skipping",
+                                         extra=self._log_extra(tf_filename=slice_filename))
+                        if not no_duplicate_mode:
+                            slice_data['db_id'] = match.get('id')
+                            slices.append(slice_data)
+                        continue
+
                 result = self.call_monitor_api('POST', '/tf-slices/', slice_data)
                 if result:
                     self.stats['slices_created'] += 1
