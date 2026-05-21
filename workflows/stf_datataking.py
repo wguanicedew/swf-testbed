@@ -1,3 +1,5 @@
+from pathlib import Path
+
 class WorkflowExecutor:
     def __init__(self, config, runner, execution_id):
         self.config = config
@@ -40,6 +42,12 @@ class WorkflowExecutor:
             List of (filename, total_tfs_or_None) tuples.
         """
         entries = []
+        workflows_dir = Path(__file__).parent
+        path = workflows_dir / path
+        if not path.exists():
+            return entries  # Return empty list if file doesn't exist
+        
+        print(f"Loading STF file list from: {path}")
         with open(path, 'r') as fh:
             for raw in fh:
                 line = raw.strip()
