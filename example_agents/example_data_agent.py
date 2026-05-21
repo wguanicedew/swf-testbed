@@ -109,17 +109,19 @@ class DataAgent(BaseAgent):
             self.logger.warning(f"Failed to update run {run_id} status")
             return False
     
-    def register_stf_file(self, run_id, filename, file_size=None, start=None, end=None, state=None, substate=None, sequence=None):
+    def register_stf_file(self, run_id, filename, file_size=None, start=None, end=None, state=None, substate=None, sequence=None, tf_count=None):
         """Register an STF file in the monitor."""
         if run_id not in self.active_runs:
             self.logger.warning(f"Cannot register file {filename} - run {run_id} not active")
             return None
             
         existing = self.call_monitor_api('GET', f'/stf-files/?stf_filename={filename}')
-        if existing and existing.get('count', 0) > 0:
-            file_id = existing['results'][0]['file_id']
-            self.logger.info(f"STF file {filename} already registered with ID {file_id}, skipping")
-            return file_id
+        if existing:
+            match = next((r for r in existing if r.get('stf_filename') == filename), None)
+            if match:
+                file_id = match['file_id']
+                self.logger.info(f"STF file {filename} already registered with ID {file_id}, skipping")
+                return file_id
 
         monitor_run_id = self.active_runs[run_id]['monitor_run_id']
 
@@ -135,6 +137,7 @@ class DataAgent(BaseAgent):
             'stf_filename': filename,
             'file_size_bytes': file_size,
             'machine_state': state or 'unknown',
+            'tf_count': tf_count,
             'status': 'registered',
             'metadata': {
                 'created_by': self.agent_name,
