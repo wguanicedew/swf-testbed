@@ -134,13 +134,15 @@ class FastMonitorAgent(BaseAgent):
         # Record each TF file in the FastMonFile table
         # TODO: register in bulk
         tf_files_created = 0
+        no_duplicate_mode = self.config.get('no_duplicate_mode', False)
         for tf_metadata in tf_subsamples:
             self.logger.debug(f"Processing {tf_metadata}")
             tf_file = fastmon_utils.record_tf_file(tf_metadata, self.config, self, self.logger)
             if tf_file:
                 tf_files_created += 1
-                # Broadcast tf_file_registered to downstream consumers
-                self.send_tf_file_notification(tf_file, message_data)
+                already_registered = tf_file.get('_already_registered', False)
+                if not (no_duplicate_mode and already_registered):
+                    self.send_tf_file_notification(tf_file, message_data)
             tf_files_registered.append(tf_file)
 
         # Update TF creation stats
@@ -177,6 +179,7 @@ def main():
         "tf_size_fraction": 0.15,  # Fraction of partition TF count for each subsample (with gaussian noise)
         "tf_count_per_stf": 1000,  # Default total TF count per STF if not provided in stf_ready message
         "tf_sequence_start": 1,  # Starting sequence number for TF files
+        "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
     }
 
     # Create agent with config and debug flag

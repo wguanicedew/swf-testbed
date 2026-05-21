@@ -169,7 +169,7 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
             match = next((r for r in existing if r.get('tf_filename') == tf_filename), None)
             if match:
                 logger.info(f"TF file {tf_filename} already registered with ID {match.get('tf_file_id')}, skipping")
-                return match
+                return {**match, '_already_registered': True}
 
         # Create TF file record via FastMonFile API
         tf_file = agent.call_monitor_api('post', '/fastmon-files/', tf_file_data)
