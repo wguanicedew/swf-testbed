@@ -11,7 +11,7 @@ Designed to run continuously under supervisord.
 
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from swf_common_lib.base_agent import BaseAgent, setup_environment
 import example_fastmon_utils as fastmon_utils
@@ -55,6 +55,17 @@ class FastMonitorAgent(BaseAgent):
         self.stf_messages_processed = 0
         self.last_message_time = None
         self.processing_stats = {'total_stf_messages': 0, 'total_tf_files_created': 0}
+        self.runs_sampled = {}  # run_id -> datetime when first sampled
+
+    def _expire_runs_sampled(self):
+        """Remove run_ids older than run_id_lifetime seconds from runs_sampled."""
+        lifetime_days = self.config.get('run_id_lifetime', 2)
+        cutoff = datetime.now() - timedelta(days=lifetime_days)
+        expired = [rid for rid, ts in self.runs_sampled.items() if ts < cutoff]
+        for rid in expired:
+            del self.runs_sampled[rid]
+        if expired:
+            self.logger.debug(f"Expired {len(expired)} run IDs from runs_sampled")
 
     def send_tf_file_notification(self, tf_file: dict, stf_file: dict):
         """
@@ -129,7 +140,14 @@ class FastMonitorAgent(BaseAgent):
             self.logger.error("No filename provided in message", extra=self._log_extra())
             return tf_files_registered
 
-        tf_subsamples = fastmon_utils.simulate_tf_subsamples(message_data, self.config, self.logger, self.agent_name)
+        run_id = message_data.get('run_id')
+        force_sample = run_id not in self.runs_sampled
+        tf_subsamples = fastmon_utils.simulate_tf_subsamples(message_data, self.config, self.logger, self.agent_name,
+                                                              force_sample=force_sample)
+
+        if tf_subsamples and run_id:
+            self.runs_sampled[run_id] = datetime.now()
+            self._expire_runs_sampled()
 
         # Record each TF file in the FastMonFile table
         # TODO: register in bulk
@@ -161,6 +179,7 @@ class FastMonitorAgent(BaseAgent):
 def main():
     """Main entry point for the agent."""
     import argparse
+    import tomllib
     from pathlib import Path
 
     script_dir = Path(__file__).parent
@@ -171,16 +190,32 @@ def main():
                         help='Testbed config file (default: SWF_TESTBED_CONFIG env var or workflows/testbed.toml)')
     args = parser.parse_args()
 
-    # Configuration for message-driven agent
+    # Default configuration
     config = {
         "selection_fraction": 0.1,  # 10% of files
         # TF simulation parameters
         "tf_files_per_stf": 7,  # Number of TF files to generate per STF
-        "tf_size_fraction": 0.15,  # Fraction of partition TF count for each subsample (with gaussian noise)
+        "tf_size_fraction": 0.15,  # Fraction of partition TF count per subsample (with gaussian noise)
         "tf_count_per_stf": 1000,  # Default total TF count per STF if not provided in stf_ready message
         "tf_sequence_start": 1,  # Starting sequence number for TF files
         "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
+        "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
+        "slices_per_sample": 5,  # Number of TFs per slice for a worker to process.
     }
+
+    # Overwrite defaults with values from [fast_processing] section of config file
+    config_path = args.testbed_config
+    if config_path is None:
+        import os
+        env_config = os.getenv('SWF_TESTBED_CONFIG')
+        config_path = env_config if env_config else 'workflows/testbed.toml'
+    try:
+        with open(config_path, 'rb') as f:
+            toml_data = tomllib.load(f)
+        file_config = toml_data.get('fast_processing', {})
+        config.update({k: v for k, v in file_config.items() if k in config})
+    except FileNotFoundError:
+        pass
 
     # Create agent with config and debug flag
     agent = FastMonitorAgent(config, debug=args.debug, config_path=args.testbed_config)

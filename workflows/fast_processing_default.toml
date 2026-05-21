@@ -50,7 +50,16 @@ physics_period_count = 1        # Single physics period
 # Fast processing parameters
 target_worker_count = 30        # Target number of workers for processing
 stf_sampling_rate = 1.0         # Fraction of STF data sampled by FastMon (100% for testing)
-slices_per_sample = 15          # Number of TF slices per STF sample
 slice_processing_time = 30      # Time to process one slice (seconds)
 worker_rampup_time = 300        # Time to bring workers online (seconds, 5 min)
 worker_rampdown_time = 60       # Time for graceful worker shutdown (seconds)
+
+# FastMon agent parameters
+selection_fraction = 0.1        # Fraction of STF files to sample (10%)
+tf_files_per_stf = 7            # Number of TF files to generate per STF
+tf_size_fraction = 0.15         # Fraction of partition TF count per subsample (with gaussian noise)
+tf_count_per_stf = 1000         # Default total TF count per STF if not provided in stf_ready message
+tf_sequence_start = 1           # Starting sequence number for TF files
+no_duplicate_mode = false        # Set true to skip notification for already-registered TF files
+run_id_lifetime = 2             # Days to keep run_id in runs_sampled cache
+slices_per_sample = 15          # Number of TF slices per STF sample

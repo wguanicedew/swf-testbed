@@ -66,14 +66,14 @@ def calculate_checksum(file_path: str, logger: logging.Logger) -> str:
 
 
 
-def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: logging.Logger, agent_name: str) -> List[Dict[str, Any]]:
+def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: logging.Logger, agent_name: str, force_sample: bool = False) -> List[Dict[str, Any]]:
     """
     Simulate creation of Time Frame (TF) subsamples from a Super Time Frame (STF) file.
 
-    The total tf_count is split into tf_files_per_stf equal partitions. Within each
-    partition a contiguous block is sampled: size is tf_size_fraction * partition_width
-    with gaussian noise, and tf_first is chosen randomly within the valid range of the
-    partition. This guarantees no overlaps across subsample files.
+    The total TFs to sample is tf_count * tf_size_fraction. This is divided into files
+    of slices_per_sample TFs each, giving n_files = floor(sampled_tfs / slices_per_sample).
+    Files are spread evenly across the STF range with a random offset within each partition,
+    guaranteeing no overlaps.
 
     Args:
         stf_file: STF data dictionary (follows the keys from daq agent)
@@ -84,26 +84,31 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
         List of TF metadata dictionaries
     """
     try:
-        tf_files_per_stf = config.get("tf_files_per_stf", 2)
+        selection_fraction = config.get("selection_fraction", 1.0)
+        if not force_sample and random.random() >= selection_fraction:
+            logger.debug(f"STF file {stf_file.get('filename')} skipped by selection_fraction={selection_fraction}")
+            return []
+
         tf_size_fraction = config.get("tf_size_fraction", 0.15)
+        slices_per_sample = config.get("slices_per_sample", 5)
         tf_sequence_start = config.get("tf_sequence_start", 1)
 
         tf_count = stf_file.get("tf_count") or config.get("tf_count_per_stf", 1000)
-        partition_width = tf_count // tf_files_per_stf
+        total_sampled = int(tf_count * tf_size_fraction)
+        n_files = max(1, total_sampled // slices_per_sample)
+        partition_width = tf_count // n_files
 
         tf_subsamples = []
         base_filename = stf_file.get("filename", "unknown").rsplit('.', 1)[0]
 
-        for i in range(tf_files_per_stf):
+        for i in range(n_files):
             sequence_number = tf_sequence_start + i
             partition_start = i * partition_width
-            partition_end = partition_start + partition_width - 1 if i < tf_files_per_stf - 1 else tf_count - 1
-            partition_size = partition_end - partition_start + 1
+            partition_end = partition_start + partition_width - 1 if i < n_files - 1 else tf_count - 1
 
-            subsample_size = max(1, min(int(partition_size * tf_size_fraction * random.gauss(1.0, 0.1)), partition_size))
-            max_start = partition_end - subsample_size + 1
+            max_start = partition_end - slices_per_sample + 1
             tf_first = random.randint(partition_start, max_start) if max_start > partition_start else partition_start
-            tf_last = tf_first + subsample_size - 1
+            tf_last = tf_first + slices_per_sample - 1
 
             tf_filename = f"{base_filename}_tf_{sequence_number:03d}.tf"
 
@@ -112,13 +117,14 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
                 "tf_first": tf_first,
                 "tf_last": tf_last,
                 "tf_count": tf_last - tf_first + 1,
-                "file_size_bytes": subsample_size,
+                "file_size_bytes": slices_per_sample,
                 "sequence_number": sequence_number,
                 "stf_parent": stf_file.get("filename"),
                 "metadata": {
                     "simulation": True,
                     "created_from": stf_file.get('filename'),
                     "tf_size_fraction": tf_size_fraction,
+                    "slices_per_sample": slices_per_sample,
                     "agent_name": agent_name,
                     "state": stf_file.get('state'),
                     "substate": stf_file.get('substate'),
