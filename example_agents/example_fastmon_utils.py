@@ -162,6 +162,15 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
             "metadata": tf_metadata.get("metadata", {})
         }
         
+        # Check if TF file already registered
+        tf_filename = tf_metadata["tf_filename"]
+        existing = agent.call_monitor_api('GET', f'/fastmon-files/?tf_filename={tf_filename}')
+        if existing:
+            match = next((r for r in existing if r.get('tf_filename') == tf_filename), None)
+            if match:
+                logger.info(f"TF file {tf_filename} already registered with ID {match.get('tf_file_id')}, skipping")
+                return match
+
         # Create TF file record via FastMonFile API
         tf_file = agent.call_monitor_api('post', '/fastmon-files/', tf_file_data)
         tf_file_id = tf_file.get('tf_file_id') or tf_file.get('id') or 'unknown'
