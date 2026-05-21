@@ -201,7 +201,7 @@ def main():
         "tf_sequence_start": 1,  # Starting sequence number for TF files
         "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
         "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
-        "slices_per_sample": 5,  # Number of TFs per slice for a worker to process.
+        "tfs_per_subsample": 20,  # Number of TFs per subsample file
     }
 
     # Overwrite defaults with values from [fast_processing] section of config file

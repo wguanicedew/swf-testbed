@@ -62,4 +62,5 @@ tf_count_per_stf = 1000         # Default total TF count per STF if not provided
 tf_sequence_start = 1           # Starting sequence number for TF files
 no_duplicate_mode = false        # Set true to skip notification for already-registered TF files
 run_id_lifetime = 2             # Days to keep run_id in runs_sampled cache
-slices_per_sample = 15          # Number of TF slices per STF sample
+slices_per_sample = 15          # Number of TF slices per STF sample (used by fast_processing_agent)
+tfs_per_subsample = 20          # Number of TFs per fastmon subsample file

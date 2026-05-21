@@ -71,7 +71,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
     Simulate creation of Time Frame (TF) subsamples from a Super Time Frame (STF) file.
 
     The total TFs to sample is tf_count * tf_size_fraction. This is divided into files
-    of slices_per_sample TFs each, giving n_files = floor(sampled_tfs / slices_per_sample).
+    of tfs_per_subsample TFs each, giving n_files = floor(sampled_tfs / tfs_per_subsample).
     Files are spread evenly across the STF range with a random offset within each partition,
     guaranteeing no overlaps.
 
@@ -90,12 +90,12 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
             return []
 
         tf_size_fraction = config.get("tf_size_fraction", 0.15)
-        slices_per_sample = config.get("slices_per_sample", 5)
+        tfs_per_subsample = config.get("tfs_per_subsample", 20)
         tf_sequence_start = config.get("tf_sequence_start", 1)
 
         tf_count = stf_file.get("tf_count") or config.get("tf_count_per_stf", 1000)
         total_sampled = int(tf_count * tf_size_fraction)
-        n_files = max(1, total_sampled // slices_per_sample)
+        n_files = max(1, total_sampled // tfs_per_subsample)
         partition_width = tf_count // n_files
 
         tf_subsamples = []
@@ -106,9 +106,11 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
             partition_start = i * partition_width
             partition_end = partition_start + partition_width - 1 if i < n_files - 1 else tf_count - 1
 
-            max_start = partition_end - slices_per_sample + 1
+            partition_size = partition_end - partition_start + 1
+            sample_size = min(tfs_per_subsample, partition_size)
+            max_start = partition_end - sample_size + 1
             tf_first = random.randint(partition_start, max_start) if max_start > partition_start else partition_start
-            tf_last = tf_first + slices_per_sample - 1
+            tf_last = tf_first + sample_size - 1
 
             tf_filename = f"{base_filename}_tf_{sequence_number:03d}.tf"
 
@@ -117,14 +119,14 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], config: dict, logger: loggi
                 "tf_first": tf_first,
                 "tf_last": tf_last,
                 "tf_count": tf_last - tf_first + 1,
-                "file_size_bytes": slices_per_sample,
+                "file_size_bytes": tfs_per_subsample,
                 "sequence_number": sequence_number,
                 "stf_parent": stf_file.get("filename"),
                 "metadata": {
                     "simulation": True,
                     "created_from": stf_file.get('filename'),
                     "tf_size_fraction": tf_size_fraction,
-                    "slices_per_sample": slices_per_sample,
+                    "tfs_per_subsample": tfs_per_subsample,
                     "agent_name": agent_name,
                     "state": stf_file.get('state'),
                     "substate": stf_file.get('substate'),
