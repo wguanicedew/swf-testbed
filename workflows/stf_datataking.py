@@ -40,13 +40,13 @@ class WorkflowExecutor:
         Lines beginning with '#' are treated as comments and ignored.
 
         Returns:
-            List of (filename, total_tfs_or_None) tuples.
+            List of [filename, num_tfs] entries.
         """
         entries = []
         path = workflows_dir / path
         if not path.exists():
             return entries  # Return empty list if file doesn't exist
-        
+
         print(f"Loading STF file list from: {path}")
         with open(path, 'r') as fh:
             for raw in fh:
@@ -55,8 +55,8 @@ class WorkflowExecutor:
                     continue
                 parts = line.split()
                 filename = parts[0]
-                total_tfs = int(parts[1]) if len(parts) >= 2 else None
-                entries.append((filename, total_tfs))
+                num_tfs = int(parts[1]) if len(parts) >= 2 else 1000
+                entries.append([filename, num_tfs])
         return entries
 
     def execute(self, env):
@@ -116,8 +116,8 @@ class WorkflowExecutor:
 
         if self._file_list:
             # File-list mode: emit one STF per entry, respecting the interval between them
-            for i, (filename, total_tfs) in enumerate(self._file_list):
-                yield from self.generate_single_stf(env, filename=filename, total_tfs=total_tfs)
+            for i, (filename, num_tfs) in enumerate(self._file_list):
+                yield from self.generate_single_stf(env, filename=filename, total_tfs=num_tfs)
                 if i < len(self._file_list) - 1:
                     yield env.timeout(interval)
         else:
@@ -310,8 +310,10 @@ class WorkflowExecutor:
             "state": "run",
             "substate": "physics"
         }
-        if total_tfs is not None:
+        if total_tfs:
             message["total_tfs"] = total_tfs
+            message["start"] = 0
+            message["end"] = total_tfs - 1
 
         destination = '/topic/epictopic'
         self.runner.send_message(destination, message)
