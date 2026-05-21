@@ -115,13 +115,19 @@ class DataAgent(BaseAgent):
             self.logger.warning(f"Cannot register file {filename} - run {run_id} not active")
             return None
             
+        existing = self.call_monitor_api('GET', f'/stf-files/?stf_filename={filename}')
+        if existing and existing.get('count', 0) > 0:
+            file_id = existing['results'][0]['file_id']
+            self.logger.info(f"STF file {filename} already registered with ID {file_id}, skipping")
+            return file_id
+
         monitor_run_id = self.active_runs[run_id]['monitor_run_id']
-        
+
         # Skip registration if run registration failed
         if monitor_run_id is None:
             self.logger.warning(f"Skipping STF file registration for {filename} - run {run_id} was not registered in monitor")
             return None
-            
+
         self.logger.info(f"Registering STF file {filename} in monitor...")
         
         file_data = {
