@@ -320,6 +320,7 @@ class WorkflowRunner(BaseAgent):
     def _load_workflow_code(self, workflow_name: str) -> str:
         """Load workflow Python code from file"""
         workflow_file = self.workflows_dir / f"{workflow_name}.py"
+        print(f"Loading workflow code from: {workflow_file}")
         if not workflow_file.exists():
             raise FileNotFoundError(f"Workflow {workflow_name}.py not found in {self.workflows_dir}")
 
@@ -339,6 +340,7 @@ class WorkflowRunner(BaseAgent):
             config_name = f"{config_name}.toml"
 
         config_file = self.workflows_dir / config_name
+        print(f"Loading workflow config from: {config_file}")
         if not config_file.exists():
             raise FileNotFoundError(f"Config {config_name} not found in {self.workflows_dir}")
 
