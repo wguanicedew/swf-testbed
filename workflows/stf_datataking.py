@@ -26,10 +26,11 @@ class WorkflowExecutor:
 
         # Optionally load an explicit file list (overrides synthetic STF name generation)
         input_file_list = self.daq.get('input_file_list')
-        self._file_list = self._load_file_list(input_file_list) if input_file_list else []
+        workflows_dir = Path(runner.workflows_dir)
+        self._file_list = self._load_file_list(input_file_list, workflows_dir) if input_file_list else []
 
     @staticmethod
-    def _load_file_list(path):
+    def _load_file_list(path, workflows_dir):
         """Load STF filenames from a file.
 
         Each non-empty, non-comment line may be either:
@@ -42,7 +43,6 @@ class WorkflowExecutor:
             List of (filename, total_tfs_or_None) tuples.
         """
         entries = []
-        workflows_dir = Path(__file__).parent
         path = workflows_dir / path
         if not path.exists():
             return entries  # Return empty list if file doesn't exist
