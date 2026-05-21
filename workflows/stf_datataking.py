@@ -314,6 +314,7 @@ class WorkflowExecutor:
             message["total_tfs"] = total_tfs
             message["start"] = 0
             message["end"] = total_tfs - 1
+            message["tf_count"] = total_tfs
 
         destination = '/topic/epictopic'
         self.runner.send_message(destination, message)
