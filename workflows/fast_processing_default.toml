@@ -48,6 +48,7 @@ stf_count = 10                  # Generate exactly 10 STF files
 physics_period_count = 1        # Single physics period
 
 # Fast processing parameters
+epic_version = "None"           # EPIC detector version (None = use default)
 target_worker_count = 30        # Target number of workers for processing
 stf_sampling_rate = 1.0         # Fraction of STF data sampled by FastMon (100% for testing)
 slice_processing_time = 30      # Time to process one slice (seconds)

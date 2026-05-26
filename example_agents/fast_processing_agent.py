@@ -438,13 +438,16 @@ class FastProcessingAgent(BaseAgent):
         # Get num_tf_per_slice from workflow params
         fast_processing = self.workflow_params.get('fast_processing', {})
         num_tf_per_slice = fast_processing.get('num_tf_per_slice', 2)
+        epic_version = fast_processing.get('epic_version', None)
+        if isinstance(epic_version, str) and epic_version.lower() == 'none':
+            epic_version = None
 
         # Create TF slices from this TF sample
         slices = self._create_tf_slices(tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice)
 
         # Push each slice to transformer queue
         for slice_data in slices:
-            self._send_slice_to_queue(slice_data)
+            self._send_slice_to_queue(slice_data, epic_version=epic_version)
 
         # Update RunState with slice counts
         self._update_run_state_slices(len(slices))
@@ -717,7 +720,7 @@ class FastProcessingAgent(BaseAgent):
 
         return slices
 
-    def _send_slice_to_queue(self, slice_data):
+    def _send_slice_to_queue(self, slice_data, epic_version=None):
         """
         Send slice message to transformer queue.
 
@@ -738,6 +741,7 @@ class FastProcessingAgent(BaseAgent):
                 'start': slice_data['tf_first'],
                 'end': slice_data['tf_last'],
                 'tf_count': slice_data['tf_count'],
+                'epic_version': epic_version,
                 'state': 'queued',
                 'substate': 'new'
             }
