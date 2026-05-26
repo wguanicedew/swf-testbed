@@ -153,9 +153,9 @@ class FastMonitorAgent(BaseAgent):
         # TODO: register in bulk
         tf_files_created = 0
         no_duplicate_mode = self.config.get('no_duplicate_mode', False)
-        self.logger.debug(f"Simulated {len(tf_subsamples)} TF slice samples")
+        self.logger.debug(f"Simulated {len(tf_subsamples)} TF sub samples")
         for tf_metadata in tf_subsamples:
-            self.logger.debug(f"Processing slice sample: {tf_metadata}")
+            self.logger.debug(f"Processing sub sample: {tf_metadata}")
             tf_file = fastmon_utils.record_tf_file(tf_metadata, self.config, self, self.logger)
             if tf_file:
                 tf_files_created += 1
@@ -167,7 +167,7 @@ class FastMonitorAgent(BaseAgent):
         # Update TF creation stats
         self.processing_stats['total_tf_files_created'] += tf_files_created
 
-        self.logger.info(f"Registered {tf_files_created} TF slice samples for STF file {message_data.get('filename')}",
+        self.logger.info(f"Registered {tf_files_created} TF sub samples for STF file {message_data.get('filename')}",
                         extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
         return tf_files_registered
 
