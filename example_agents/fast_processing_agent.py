@@ -432,7 +432,7 @@ class FastProcessingAgent(BaseAgent):
         self.stats['tf_files_received'] += 1
         self.tf_files_received += 1
 
-        self.logger.info(f"TF file registered: {tf_filename} (from STF: {stf_filename})",
+        self.logger.info(f"TF file registered: {tf_filename} (from STF: {stf_filename}, tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
                          extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
 
         # Get num_tf_per_slice from workflow params
