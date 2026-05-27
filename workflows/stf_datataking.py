@@ -139,10 +139,12 @@ class WorkflowExecutor:
 
     def generate_single_stf(self, env, filename=None, total_tfs=None):
         self.stf_sequence += 1
-        stf_filename = filename if filename else f"swf.{self.run_id}.{self.stf_sequence:06d}.stf"
+        from_file_list = filename is not None
+        stf_filename = filename if from_file_list else f"swf.{self.run_id}.{self.stf_sequence:06d}.stf"
+        file_type = None if from_file_list else "fake"
 
         # Broadcast STF generation
-        yield env.process(self.broadcast_stf_gen(env, stf_filename, total_tfs=total_tfs))
+        yield env.process(self.broadcast_stf_gen(env, stf_filename, total_tfs=total_tfs, file_type=file_type))
 
         generation_time = self.daq['stf_generation_time']
         yield env.timeout(generation_time)
@@ -293,7 +295,7 @@ class WorkflowExecutor:
         )
         yield env.timeout(0.1)
 
-    def broadcast_stf_gen(self, env, stf_filename, total_tfs=None):
+    def broadcast_stf_gen(self, env, stf_filename, total_tfs=None, file_type=None):
         """Broadcast STF generation."""
         from datetime import datetime
 
@@ -310,6 +312,8 @@ class WorkflowExecutor:
             "state": "run",
             "substate": "physics"
         }
+        if file_type is not None:
+            message["file_type"] = file_type
         if total_tfs:
             message["total_tfs"] = total_tfs
             message["start"] = 0

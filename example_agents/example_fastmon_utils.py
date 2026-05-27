@@ -221,7 +221,10 @@ def create_tf_message(tf_file: Dict[str, Any], stf_file: Dict[str, Any], agent_n
         "status": tf_file.get('status'),
         "timestamp": datetime.now().isoformat(),
     }
-    
+
+    if 'file_type' in stf_file:
+        message['file_type'] = stf_file['file_type']
+
     return message
 
 

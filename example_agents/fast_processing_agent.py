@@ -429,6 +429,7 @@ class FastProcessingAgent(BaseAgent):
         tf_first = message_data.get('tf_first', 0)
         tf_last = message_data.get('tf_last')
         tf_count = message_data.get('tf_count')
+        file_type = message_data.get('file_type')
 
         self.stats['tf_files_received'] += 1
         self.tf_files_received += 1
@@ -448,7 +449,7 @@ class FastProcessingAgent(BaseAgent):
 
         # Push each slice to transformer queue
         for slice_data in slices:
-            self._send_slice_to_queue(slice_data, epic_version=epic_version)
+            self._send_slice_to_queue(slice_data, epic_version=epic_version, file_type=file_type)
 
         # Update RunState with slice counts
         self._update_run_state_slices(len(slices))
@@ -721,31 +722,35 @@ class FastProcessingAgent(BaseAgent):
 
         return slices
 
-    def _send_slice_to_queue(self, slice_data, epic_version=None):
+    def _send_slice_to_queue(self, slice_data, epic_version=None, file_type=None):
         """
         Send slice message to transformer queue.
 
         Message format per Wen's iDDS design.
         """
         # Build message per iDDS format
+        content = {
+            'run_id': self.current_run_id,
+            'execution_id': self.current_execution_id,
+            'req_id': str(uuid.uuid4()),
+            'filename': slice_data['stf_filename'],
+            'tf_filename': slice_data['tf_filename'],
+            'slice_id': slice_data['slice_id'],
+            'start': slice_data['tf_first'],
+            'end': slice_data['tf_last'],
+            'tf_count': slice_data['tf_count'],
+            'epic_version': epic_version,
+            'state': 'queued',
+            'substate': 'new'
+        }
+        if file_type is not None:
+            content['file_type'] = file_type
+
         message = {
             'msg_type': 'slice',
             'run_id': self.current_run_id,
             'created_at': datetime.utcnow().isoformat(),
-            'content': {
-                'run_id': self.current_run_id,
-                'execution_id': self.current_execution_id,
-                'req_id': str(uuid.uuid4()),
-                'filename': slice_data['stf_filename'],
-                'tf_filename': slice_data['tf_filename'],
-                'slice_id': slice_data['slice_id'],
-                'start': slice_data['tf_first'],
-                'end': slice_data['tf_last'],
-                'tf_count': slice_data['tf_count'],
-                'epic_version': epic_version,
-                'state': 'queued',
-                'substate': 'new'
-            }
+            'content': content
         }
 
         # Send to transformer queue — persistent so slices survive broker restart,
