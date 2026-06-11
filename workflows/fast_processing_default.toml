@@ -66,3 +66,4 @@ no_duplicate_mode = false        # Set true to skip notification for already-reg
 run_id_lifetime = 2             # Days to keep run_id in runs_sampled cache
 num_tf_per_slice = 2            # Number of TFs per processing slice
 tfs_per_subsample = 20          # Number of TFs per fastmon subsample file
+dest_path = '/gpfs02/eic/panda/jobs/'  # output destination path

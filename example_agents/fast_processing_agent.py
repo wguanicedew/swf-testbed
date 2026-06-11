@@ -40,13 +40,14 @@ class FastProcessingAgent(BaseAgent):
     # Queue for transformer results
     TRANSFORMER_RESULTS_QUEUE = '/queue/panda.results.fastprocessing'
 
-    def __init__(self, debug=False, config_path=None):
+    def __init__(self, debug=False, config_path=None, dest_path=None):
         super().__init__(
             agent_type='Fast_Processing',
             subscription_queue='/topic/epictopic',
             debug=debug,
             config_path=config_path
         )
+        self.default_dest_path = dest_path
         # Additional subscriptions beyond the primary queue (subscribed in run())
         self._extra_subscription_queues = [self.TRANSFORMER_RESULTS_QUEUE]
 
@@ -443,9 +444,10 @@ class FastProcessingAgent(BaseAgent):
         epic_version = fast_processing.get('epic_version', None)
         if isinstance(epic_version, str) and epic_version.lower() == 'none':
             epic_version = None
+        dest_path = fast_processing.get('dest_path', None) or self.default_dest_path
 
         # Create TF slices from this TF sample
-        slices = self._create_tf_slices(tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice)
+        slices = self._create_tf_slices(tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
 
         # Push each slice to transformer queue
         for slice_data in slices:
@@ -646,7 +648,7 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error(f"Error updating RunState slices: {e}",
                               extra=self._log_extra(error=str(e)))
 
-    def _create_tf_slices(self, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice):
+    def _create_tf_slices(self, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
         """
         Create TF slice records in database, based on the TF file's range [tf_first, tf_last].
 
@@ -680,6 +682,7 @@ class FastProcessingAgent(BaseAgent):
                 'tf_count': slice_tf_count,
                 'tf_filename': slice_filename,
                 'stf_filename': stf_filename,
+                'dest_path': dest_path,
                 'run_number': self.current_run_id,
                 'status': 'queued',
                 'retries': 0,
@@ -893,7 +896,9 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--testbed-config", default=None,
                         help="Testbed config file (default: SWF_TESTBED_CONFIG env var or workflows/testbed.toml)")
+    parser.add_argument("--dest-path", default=None,
+                        help="Default destination path for TF slices (used when dest_path is not set in workflow parameters)")
     args = parser.parse_args()
 
-    agent = FastProcessingAgent(debug=args.debug, config_path=args.testbed_config)
+    agent = FastProcessingAgent(debug=args.debug, config_path=args.testbed_config, dest_path=args.dest_path)
     agent.run()
