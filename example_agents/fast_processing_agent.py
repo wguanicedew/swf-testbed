@@ -390,9 +390,10 @@ class FastProcessingAgent(BaseAgent):
                 'worker_rampdown_time': self.workflow_params.get("fast_processing", {}).get('worker_rampdown_time', 1)
             })
 
+            run_id = message_data.get('run_id') or self.current_run_id
             message = {
                 'msg_type': 'run_imminent_worker',
-                'run_id': self.current_run_id,
+                'run_id': run_id,
                 'created_at': datetime.utcnow().isoformat(),
                 'content': content
             }
@@ -415,7 +416,7 @@ class FastProcessingAgent(BaseAgent):
         # Agent is now actively processing this run
         self.set_processing()
 
-        self._update_run_state(phase='physics', state='running', substate='physics')
+        self._update_run_state(run_id=message_data.get('run_id'), phase='physics', state='running', substate='physics')
 
         self._log_system_event('start_run', {
             'execution_id': self.current_execution_id
@@ -446,15 +447,17 @@ class FastProcessingAgent(BaseAgent):
             epic_version = None
         dest_path = fast_processing.get('dest_path', None) or self.default_dest_path
 
+        run_id = message_data.get('run_id')
+
         # Create TF slices from this TF sample
-        slices = self._create_tf_slices(tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
+        slices = self._create_tf_slices(run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
 
         # Push each slice to transformer queue
         for slice_data in slices:
-            self._send_slice_to_queue(slice_data, epic_version=epic_version, file_type=file_type)
+            self._send_slice_to_queue(run_id, slice_data, epic_version=epic_version, file_type=file_type)
 
         # Update RunState with slice counts
-        self._update_run_state_slices(len(slices))
+        self._update_run_state_slices(run_id=run_id, new_slices_count=len(slices))
 
         # Log event
         self._log_system_event('tf_file_processed', {
@@ -465,10 +468,10 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_pause_run(self, message_data):
         """Handle pause_run: Update RunState to standby."""
-        self.logger.info(f"Run paused: run_id={self.current_run_id}",
+        self.logger.info(f"Run paused: run_id={message_data.get('run_id') or self.current_run_id}",
                          extra=self._log_extra())
 
-        self._update_run_state(substate='standby')
+        self._update_run_state(run_id=message_data.get('run_id'), substate='standby')
 
         self._log_system_event('pause_run', {
             'execution_id': self.current_execution_id
@@ -476,10 +479,10 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_resume_run(self, message_data):
         """Handle resume_run: Update RunState back to physics."""
-        self.logger.info(f"Run resumed: run_id={self.current_run_id}",
+        self.logger.info(f"Run resumed: run_id={message_data.get('run_id') or self.current_run_id}",
                          extra=self._log_extra())
 
-        self._update_run_state(substate='physics')
+        self._update_run_state(run_id=message_data.get('run_id'), substate='physics')
 
         self._log_system_event('resume_run', {
             'execution_id': self.current_execution_id
@@ -490,7 +493,7 @@ class FastProcessingAgent(BaseAgent):
         total_stf = message_data.get('total_stf_files', 0)
 
         self.logger.info(
-            f"Run ended: run_id={self.current_run_id}, "
+            f"Run ended: run_id={message_data.get('run_id') or self.current_run_id}, "
             f"tf_files_received={self.stats['tf_files_received']}, "
             f"slices_created={self.stats['slices_created']}",
             extra=self._log_extra(total_stf=total_stf,
@@ -498,7 +501,7 @@ class FastProcessingAgent(BaseAgent):
                                   slices_created=self.stats['slices_created'])
         )
 
-        self._update_run_state(phase='completed', state='ended', substate=None)
+        self._update_run_state(run_id=message_data.get('run_id'), phase='completed', state='ended', substate=None)
 
         self._log_system_event('end_run', {
             'execution_id': self.current_execution_id,
@@ -517,9 +520,10 @@ class FastProcessingAgent(BaseAgent):
                 'execution_id': self.current_execution_id
             })
 
+            run_id = message_data.get('run_id') or self.current_run_id
             message = {
                 'msg_type': 'end_run',
-                'run_id': self.current_run_id,
+                'run_id': run_id,
                 'created_at': datetime.utcnow().isoformat(),
                 'content': content
             }
@@ -603,7 +607,7 @@ class FastProcessingAgent(BaseAgent):
                               extra=self._log_extra(error=str(e)))
             return {}
 
-    def _update_run_state(self, phase=None, state=None, substate=None):
+    def _update_run_state(self, run_id=None, phase=None, state=None, substate=None):
         """Update RunState record."""
         update_data = {
             'state_changed_at': datetime.now().isoformat()
@@ -618,7 +622,7 @@ class FastProcessingAgent(BaseAgent):
         try:
             result = self.call_monitor_api(
                 'PATCH',
-                f'/run-states/{self.current_run_id}/',
+                f'/run-states/{run_id or self.current_run_id}/',
                 update_data
             )
             if result:
@@ -627,11 +631,11 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error(f"Error updating RunState: {e}",
                               extra=self._log_extra(error=str(e)))
 
-    def _update_run_state_slices(self, new_slices_count):
+    def _update_run_state_slices(self, run_id=None, new_slices_count=0):
         """Update RunState with new slice counts."""
         # We need to increment, so fetch current values first
         try:
-            current = self.call_monitor_api('GET', f'/run-states/{self.current_run_id}/')
+            current = self.call_monitor_api('GET', f'/run-states/{run_id or self.current_run_id}/')
             if current:
                 update_data = {
                     'stf_samples_received': current.get('stf_samples_received', 0) + 1,
@@ -648,7 +652,7 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error(f"Error updating RunState slices: {e}",
                               extra=self._log_extra(error=str(e)))
 
-    def _create_tf_slices(self, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
+    def _create_tf_slices(self, run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
         """
         Create TF slice records in database, based on the TF file's range [tf_first, tf_last].
 
@@ -684,6 +688,7 @@ class FastProcessingAgent(BaseAgent):
                 'stf_filename': stf_filename,
                 'dest_path': dest_path,
                 'run_number': self.current_run_id,
+                'run_id': run_id or self.current_run_id,
                 'status': 'queued',
                 'retries': 0,
                 'metadata': {
@@ -725,7 +730,7 @@ class FastProcessingAgent(BaseAgent):
 
         return slices
 
-    def _send_slice_to_queue(self, slice_data, epic_version=None, file_type=None):
+    def _send_slice_to_queue(self, run_id, slice_data, epic_version=None, file_type=None):
         """
         Send slice message to transformer queue.
 
@@ -733,7 +738,7 @@ class FastProcessingAgent(BaseAgent):
         """
         # Build message per iDDS format
         content = {
-            'run_id': self.current_run_id,
+            'run_id': run_id or self.current_run_id,
             'execution_id': self.current_execution_id,
             'req_id': str(uuid.uuid4()),
             'filename': slice_data['stf_filename'],
@@ -751,7 +756,7 @@ class FastProcessingAgent(BaseAgent):
 
         message = {
             'msg_type': 'slice',
-            'run_id': self.current_run_id,
+            'run_id': run_id or self.current_run_id,
             'created_at': datetime.utcnow().isoformat(),
             'content': content
         }
