@@ -747,6 +747,7 @@ class FastProcessingAgent(BaseAgent):
             'start': slice_data['tf_first'],
             'end': slice_data['tf_last'],
             'tf_count': slice_data['tf_count'],
+            'dest_path': slice_data['dest_path'],
             'epic_version': epic_version,
             'state': 'queued',
             'substate': 'new'
