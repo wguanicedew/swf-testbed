@@ -271,6 +271,7 @@ class DataAgent(BaseAgent):
         substate = message_data.get('substate')
         sequence = message_data.get('sequence')
         tf_count = message_data.get('tf_count')
+        file_type = message_data.get('file_type')
 
         self.logger.info("Processing STF file",
                         extra=self._log_extra(stf_filename=filename, size_bytes=size_bytes,
@@ -291,6 +292,7 @@ class DataAgent(BaseAgent):
         stf_ready_message = {
             "msg_type": "stf_ready",
             "namespace": self.namespace,
+            'file_type': file_type,
             "filename": filename,
             "run_id": run_id,
             "file_url": file_url,
