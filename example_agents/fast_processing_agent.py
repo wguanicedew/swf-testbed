@@ -369,12 +369,18 @@ class FastProcessingAgent(BaseAgent):
             extra=self._log_extra()
         )
 
+        workflow_params = self._get_workflow_params(
+            message_data.get('run_id') or self.current_run_id,
+            message_data.get('execution_id') or self.current_execution_id
+        )
+        fast_processing = workflow_params.get("fast_processing", {})
+
         self._log_system_event('run_imminent', {
             'execution_id': self.current_execution_id,
-            'target_worker_count': self.workflow_params.get("fast_processing", {}).get('target_worker_count', 0),
-            'stf_sampling_rate': self.workflow_params.get("fast_processing", {}).get('stf_sampling_rate', 0),
-            'slices_per_sample': self.workflow_params.get("fast_processing", {}).get('slices_per_sample', 0),
-            'no_duplicate_mode': self.workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
+            'target_worker_count': fast_processing.get('target_worker_count', 0),
+            'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
+            'slices_per_sample': fast_processing.get('slices_per_sample', 0),
+            'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
         })
 
         # Build and broadcast a run_imminent message to workers
@@ -385,12 +391,12 @@ class FastProcessingAgent(BaseAgent):
             content = dict(message_data or {})
             content.update({
                 'execution_id': self.current_execution_id,
-                'core_count': self.workflow_params.get("fast_processing", {}).get('target_worker_count', 1),
-                'memory_per_core': self.workflow_params.get("fast_processing", {}).get('memory_per_core', 4000),
-                'target_worker_count': self.workflow_params.get("fast_processing", {}).get('target_worker_count', 1),
-                'slice_processing_time': self.workflow_params.get("fast_processing", {}).get('slice_processing_time', 1),
-                'worker_rampup_time': self.workflow_params.get("fast_processing", {}).get('worker_rampup_time', 1),
-                'worker_rampdown_time': self.workflow_params.get("fast_processing", {}).get('worker_rampdown_time', 1)
+                'core_count': fast_processing.get('target_worker_count', 1),
+                'memory_per_core': fast_processing.get('memory_per_core', 4000),
+                'target_worker_count': fast_processing.get('target_worker_count', 1),
+                'slice_processing_time': fast_processing.get('slice_processing_time', 1),
+                'worker_rampup_time': fast_processing.get('worker_rampup_time', 1),
+                'worker_rampdown_time': fast_processing.get('worker_rampdown_time', 1)
             })
 
             run_id = message_data.get('run_id') or self.current_run_id
@@ -443,7 +449,11 @@ class FastProcessingAgent(BaseAgent):
                          extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
 
         # Get num_tf_per_slice from workflow params
-        fast_processing = self.workflow_params.get('fast_processing', {})
+        workflow_params = self._get_workflow_params(
+            message_data.get('run_id') or self.current_run_id,
+            message_data.get('execution_id') or self.current_execution_id
+        )
+        fast_processing = workflow_params.get('fast_processing', {})
         num_tf_per_slice = fast_processing.get('num_tf_per_slice', 2)
         epic_version = fast_processing.get('epic_version', None)
         if isinstance(epic_version, str) and epic_version.lower() == 'none':
@@ -736,7 +746,8 @@ class FastProcessingAgent(BaseAgent):
 
             # Create in database
             try:
-                no_duplicate_mode = self.workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
+                workflow_params = self._get_workflow_params(run_id or self.current_run_id, self.current_execution_id)
+                no_duplicate_mode = workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
                 existing = self.call_monitor_api('GET', f'/tf-slices/?tf_filename={slice_filename}&slice_id={i}')
                 if existing:
                     match = next((r for r in existing
@@ -822,12 +833,13 @@ class FastProcessingAgent(BaseAgent):
 
     def _log_system_event(self, event_type, event_data):
         """Log event to SystemStateEvent table."""
+        workflow_params = self._get_workflow_params(self.current_run_id, self.current_execution_id)
         event = {
             'timestamp': datetime.now().isoformat(),
             'run_number': self.current_run_id,
             'event_type': event_type,
-            'state': self.workflow_params.get('state', 'unknown'),
-            'substate': self.workflow_params.get('substate'),
+            'state': workflow_params.get('state', 'unknown'),
+            'substate': workflow_params.get('substate'),
             'event_data': event_data
         }
 
