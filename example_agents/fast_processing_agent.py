@@ -18,7 +18,7 @@ import logging
 import traceback
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import stomp
 from swf_common_lib.base_agent import BaseAgent
 
@@ -53,6 +53,9 @@ class FastProcessingAgent(BaseAgent):
 
         # Workflow parameters (populated on run_imminent)
         self.workflow_params = {}
+
+        # Cache: run_id -> {'params': dict, 'expires_at': datetime}
+        self.workflow_params_cache = {}
 
         # Processing state
         self.tf_files_received = 0
@@ -351,11 +354,11 @@ class FastProcessingAgent(BaseAgent):
                 'results_failed': 0
             }
 
-        if execution_id and execution_id != self.current_execution_id:
+        if execution_id and (execution_id != self.current_execution_id or not self.workflow_params):
             self.current_execution_id = execution_id
-            # Fetch workflow params if we don't have them
+            # Fetch workflow params if we don't have them (use cache keyed by run_id)
             if not self.workflow_params:
-                self.workflow_params = self._fetch_workflow_parameters(execution_id)
+                self.workflow_params = self._get_workflow_params(run_id, execution_id)
                 if self.workflow_params:
                     self.logger.info(f"Workflow parameters loaded (mid-run): {json.dumps(self.workflow_params, indent=2, sort_keys=True)}")
 
@@ -591,6 +594,40 @@ class FastProcessingAgent(BaseAgent):
     # -------------------------------------------------------------------------
     # Helper methods
     # -------------------------------------------------------------------------
+
+    def _get_workflow_params(self, run_id, execution_id=None):
+        """Return workflow params for run_id from cache, fetching if missing or expired.
+
+        On a cache hit the expiry is refreshed from the current access time.
+        If execution_id is None, only the cache is consulted (no fetch).
+        """
+        now = datetime.now(timezone.utc)
+
+        # Evict all stale entries on every access
+        expired_keys = [k for k, v in self.workflow_params_cache.items() if now >= v['expires_at']]
+        for k in expired_keys:
+            del self.workflow_params_cache[k]
+            self.logger.debug(f"Workflow params cache expired for run_id={k}")
+
+        entry = self.workflow_params_cache.get(run_id)
+        if entry:
+            # Refresh expiry on access
+            lifetime_hours = entry['params'].get('cache_lifetime_hours', 24)
+            entry['expires_at'] = now + timedelta(hours=lifetime_hours)
+            return entry['params']
+
+        if execution_id is None:
+            return {}
+
+        params = self._fetch_workflow_parameters(execution_id)
+        if params:
+            lifetime_hours = params.get('cache_lifetime_hours', 24)
+            self.workflow_params_cache[run_id] = {
+                'params': params,
+                'expires_at': now + timedelta(hours=lifetime_hours)
+            }
+            self.logger.debug(f"Workflow params cached for run_id={run_id}, lifetime={lifetime_hours}h")
+        return params
 
     def _fetch_workflow_parameters(self, execution_id):
         """Fetch workflow parameters from WorkflowExecution API."""
