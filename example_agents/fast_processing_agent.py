@@ -458,6 +458,9 @@ class FastProcessingAgent(BaseAgent):
         epic_version = fast_processing.get('epic_version', None)
         if isinstance(epic_version, str) and epic_version.lower() == 'none':
             epic_version = None
+        epic_image = fast_processing.get('epic_image', None)
+        if isinstance(epic_image, str) and epic_image.lower() == 'none':
+            epic_image = None
         dest_path = fast_processing.get('dest_path', None) or self.default_dest_path
 
         run_id = message_data.get('run_id')
@@ -467,7 +470,7 @@ class FastProcessingAgent(BaseAgent):
 
         # Push each slice to transformer queue
         for slice_data in slices:
-            self._send_slice_to_queue(run_id, slice_data, epic_version=epic_version, file_type=file_type)
+            self._send_slice_to_queue(run_id, slice_data, epic_version=epic_version, epic_image=epic_image, file_type=file_type)
 
         # Update RunState with slice counts
         self._update_run_state_slices(run_id=run_id, new_slices_count=len(slices))
@@ -778,7 +781,7 @@ class FastProcessingAgent(BaseAgent):
 
         return slices
 
-    def _send_slice_to_queue(self, run_id, slice_data, epic_version=None, file_type=None):
+    def _send_slice_to_queue(self, run_id, slice_data, epic_version=None, epic_image=None, file_type=None):
         """
         Send slice message to transformer queue.
 
@@ -797,6 +800,7 @@ class FastProcessingAgent(BaseAgent):
             'tf_count': slice_data['tf_count'],
             'dest_path': slice_data['dest_path'],
             'epic_version': epic_version,
+            'epic_image': epic_image,
             'state': 'queued',
             'substate': 'new'
         }
