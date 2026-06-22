@@ -69,4 +69,4 @@ num_tf_per_slice = 2            # Number of TFs per processing slice
 tfs_per_subsample = 20          # Number of TFs per fastmon subsample file
 dest_path = '/gpfs02/eic/panda/jobs/'  # output destination path
 
-processor_type = "none".        # none or zeromq
+processor_type = "none"        # none or zeromq
