@@ -63,6 +63,9 @@ class FastProcessingAgent(BaseAgent):
         # Processing state
         self.tf_files_processed = 0
         self.slices_created = 0
+        self.stf_messages_processed = 0
+        self.last_message_time = None
+        self.runs_sampled = {}  # run_id -> datetime when first sampled
 
         # Statistics
         self.stats = {
@@ -87,6 +90,17 @@ class FastProcessingAgent(BaseAgent):
             "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
             "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
             "tfs_per_subsample": 20,  # Number of TFs per subsample file
+            # Worker sizing (broadcast to PanDA transformer workers on run_imminent)
+            "target_worker_count": 1,
+            "memory_per_core": 4000,
+            "slice_processing_time": 10,
+            "worker_rampup_time": 1,
+            "worker_rampdown_time": 1,
+            # Transformer job parameters
+            "epic_version": None,
+            "epic_image": None,
+            "processor_type": None,
+            "dest_path": None,
         }
 
         # Overwrite defaults with values from [fast_processing] section of config file
@@ -233,6 +247,16 @@ class FastProcessingAgent(BaseAgent):
             logging.warning(f"Reconnection attempt failed: {e}")
             self.mq_connected = False
             return False
+
+    def _expire_runs_sampled(self):
+        """Remove run_ids older than run_id_lifetime days from runs_sampled."""
+        lifetime_days = self.config.get('run_id_lifetime', 2)
+        cutoff = datetime.now() - timedelta(days=lifetime_days)
+        expired = [rid for rid, ts in self.runs_sampled.items() if ts < cutoff]
+        for rid in expired:
+            del self.runs_sampled[rid]
+        if expired:
+            self.logger.debug(f"Expired {len(expired)} run IDs from runs_sampled")
 
     def _register_subscribers(self):
         """Register all subscriptions (primary + extra) in the monitor."""
@@ -520,7 +544,7 @@ class FastProcessingAgent(BaseAgent):
                         'run_id': message_data.get('run_id'),
                         'execution_id': message_data.get('execution_id') or self.current_execution_id,
                     }
-                    self.handle_slice(slice_message)
+                    self.handle_slice(slice_message, fast_processing)
             tf_files_processed.append(tf_file)
 
         # Update TF creation stats
@@ -530,10 +554,11 @@ class FastProcessingAgent(BaseAgent):
                         extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
         return tf_files_processed
     
-    def handle_slice(self, message_data, fast_processing={}):
+    def handle_slice(self, message_data, fast_processing=None):
         """
         Handle TF sub sample: Create TF slices, push to worker queue.
         """
+        fast_processing = fast_processing or {}
         tf_filename = message_data.get('tf_filename')
         stf_filename = message_data.get('stf_filename')
         tf_first = message_data.get('tf_first', 0)
