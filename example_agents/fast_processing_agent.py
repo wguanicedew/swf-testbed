@@ -12,6 +12,7 @@ Pipeline: FastMon Agent [tf_file_registered] -> Fast Processing Agent [TF slices
 Message format specification: https://github.com/wguanicedew/iDDS/blob/dev/main/prompt.md
 """
 
+import os
 import signal
 import time
 import logging
@@ -20,14 +21,16 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 import stomp
+import tomllib
 from swf_common_lib.base_agent import BaseAgent
+import fast_processing_utils
 
 
 class FastProcessingAgent(BaseAgent):
     """
     Fast Processing Agent for TF slice creation and distribution.
 
-    Subscribes to epictopic, receives tf_file_registered from FastMon,
+    Subscribes to epictopic, receives stf_ready from Data Agent,
     creates TF slices, and pushes them to the PanDA transformer queue.
     """
 
@@ -58,18 +61,46 @@ class FastProcessingAgent(BaseAgent):
         self.workflow_params_cache = {}
 
         # Processing state
-        self.tf_files_received = 0
+        self.tf_files_processed = 0
         self.slices_created = 0
 
         # Statistics
         self.stats = {
-            'tf_files_received': 0,
+            'total_stf_messages': 0,
+            'tf_files_created': 0,
+            'tf_files_processed': 0,
             'slices_created': 0,
             'slices_sent': 0,
             'results_received': 0,
             'results_done': 0,
             'results_failed': 0
         }
+
+        # Default configuration
+        self.config = {
+            "selection_fraction": 0.1,  # 10% of files
+            # TF simulation parameters
+            "tf_files_per_stf": 7,  # Number of TF files to generate per STF
+            "tf_size_fraction": 0.15,  # Fraction of partition TF count per subsample (with gaussian noise)
+            "tf_count_per_stf": 1000,  # Default total TF count per STF if not provided in stf_ready message
+            "tf_sequence_start": 1,  # Starting sequence number for TF files
+            "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
+            "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
+            "tfs_per_subsample": 20,  # Number of TFs per subsample file
+        }
+
+        # Overwrite defaults with values from [fast_processing] section of config file
+        config_path = self.config_path
+        if config_path is None:
+            env_config = os.getenv('SWF_TESTBED_CONFIG')
+            config_path = env_config if env_config else 'workflows/testbed.toml'
+        try:
+            with open(config_path, 'rb') as f:
+                toml_data = tomllib.load(f)
+            file_config = toml_data.get('fast_processing', {})
+            self.config.update({k: v for k, v in file_config.items() if k in self.config})
+        except FileNotFoundError:
+            pass
 
     def run(self):
         """
@@ -314,8 +345,8 @@ class FastProcessingAgent(BaseAgent):
                 self.handle_run_imminent(message_data)
             elif msg_type == 'start_run':
                 self.handle_start_run(message_data)
-            elif msg_type == 'tf_file_registered':
-                self.handle_tf_file_registered(message_data)
+            elif msg_type == 'stf_ready':
+                self.handle_stf_ready(message_data)
             elif msg_type == 'pause_run':
                 self.handle_pause_run(message_data)
             elif msg_type == 'resume_run':
@@ -343,10 +374,12 @@ class FastProcessingAgent(BaseAgent):
         if run_id and run_id != self.current_run_id:
             self.current_run_id = run_id
             # Reset stats for new run
-            self.tf_files_received = 0
+            self.tf_files_processed = 0
             self.slices_created = 0
             self.stats = {
-                'tf_files_received': 0,
+                'total_stf_messages': 0,
+                'tf_files_created': 0,
+                'tf_files_processed': 0,
                 'slices_created': 0,
                 'slices_sent': 0,
                 'results_received': 0,
@@ -377,7 +410,7 @@ class FastProcessingAgent(BaseAgent):
 
         self._log_system_event('run_imminent', {
             'execution_id': self.current_execution_id,
-            'target_worker_count': fast_processing.get('target_worker_count', 0),
+            'target_worker_count': self.config.get('target_worker_count', 0),
             'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
             'slices_per_sample': fast_processing.get('slices_per_sample', 0),
             'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
@@ -391,12 +424,12 @@ class FastProcessingAgent(BaseAgent):
             content = dict(message_data or {})
             content.update({
                 'execution_id': self.current_execution_id,
-                'core_count': fast_processing.get('target_worker_count', 1),
-                'memory_per_core': fast_processing.get('memory_per_core', 4000),
-                'target_worker_count': fast_processing.get('target_worker_count', 1),
-                'slice_processing_time': fast_processing.get('slice_processing_time', 1),
-                'worker_rampup_time': fast_processing.get('worker_rampup_time', 1),
-                'worker_rampdown_time': fast_processing.get('worker_rampdown_time', 1)
+                'core_count': self.config.get('target_worker_count', 1),
+                'memory_per_core': self.config.get('memory_per_core', 4000),
+                'target_worker_count': self.config.get('target_worker_count', 1),
+                'slice_processing_time': self.config.get('slice_processing_time', 1),
+                'worker_rampup_time': self.config.get('worker_rampup_time', 1),
+                'worker_rampdown_time': self.config.get('worker_rampdown_time', 1)
             })
 
             run_id = message_data.get('run_id') or self.current_run_id
@@ -431,9 +464,75 @@ class FastProcessingAgent(BaseAgent):
             'execution_id': self.current_execution_id
         })
 
-    def handle_tf_file_registered(self, message_data):
+    def handle_stf_ready(self, message_data):
         """
-        Handle tf_file_registered from FastMon: Create TF slices, push to worker queue.
+        Handle stf_ready message and sample STFs into TFs
+        Registers the TFs in the swf-monitor database and notifies clients.
+        """
+        self.logger.info("Processing stf_ready message", extra=self._log_extra())
+
+        # Update message tracking stats
+        self.last_message_time = datetime.now()
+        self.stf_messages_processed += 1
+        self.stats['total_stf_messages'] += 1
+
+        tf_files_processed = []
+        self.logger.debug(f"Message data received: {message_data}", extra=self._log_extra())
+        if not message_data.get('filename'):
+            self.logger.error("No filename provided in message", extra=self._log_extra())
+            return tf_files_processed
+
+        # Get num_tf_per_slice from workflow params
+        workflow_params = self._get_workflow_params(
+            message_data.get('run_id') or self.current_run_id,
+            message_data.get('execution_id') or self.current_execution_id
+        )
+        fast_processing = workflow_params.get('fast_processing', {})
+
+        run_id = message_data.get('run_id')
+        force_sample = run_id not in self.runs_sampled
+        tf_subsamples = fast_processing_utils.simulate_tf_subsamples(message_data, fast_processing,self.config, self.logger, self.agent_name,
+                                                                     force_sample=force_sample)
+
+        if tf_subsamples and run_id:
+            self.runs_sampled[run_id] = datetime.now()
+            self._expire_runs_sampled()
+
+        # Record each TF file in the FastMonFile table
+        # TODO: register in bulk
+        tf_files_created = 0
+        no_duplicate_mode = self.config.get('no_duplicate_mode', False)
+        self.logger.debug(f"Simulated {len(tf_subsamples)} TF sub samples")
+        for tf_metadata in tf_subsamples:
+            self.logger.debug(f"Processing TF sub sample: {tf_metadata}")
+            tf_file = fast_processing_utils.record_tf_file(tf_metadata, self.config, self, self.logger)
+            if tf_file:
+                tf_files_created += 1
+                already_registered = tf_file.get('_already_registered', False)
+                if not (no_duplicate_mode and already_registered):
+                    slice_message = {
+                        'tf_filename': tf_file.get('tf_filename'),
+                        'stf_filename': tf_file.get('stf_file') or message_data.get('filename'),
+                        'tf_first': tf_file.get('tf_first'),
+                        'tf_last': tf_file.get('tf_last'),
+                        'tf_count': tf_file.get('tf_count'),
+                        'file_type': message_data.get('file_type'),
+                        'run_id': message_data.get('run_id'),
+                        'execution_id': message_data.get('execution_id') or self.current_execution_id,
+                    }
+                    self.handle_slice(slice_message)
+            tf_files_processed.append(tf_file)
+
+        # Update TF creation stats
+        self.stats['tf_files_created'] += tf_files_created
+
+        self.logger.info(f"Processed {tf_files_created} TF sub samples for STF file {message_data.get('filename')}",
+                        extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
+        return tf_files_processed
+    
+    def handle_slice(self, message_data, fast_processing={}):
+        """
+        Handle TF sub sample: Create TF slices, push to worker queue.
         """
         tf_filename = message_data.get('tf_filename')
         stf_filename = message_data.get('stf_filename')
@@ -442,29 +541,34 @@ class FastProcessingAgent(BaseAgent):
         tf_count = message_data.get('tf_count')
         file_type = message_data.get('file_type')
 
-        self.stats['tf_files_received'] += 1
-        self.tf_files_received += 1
-
-        self.logger.info(f"TF file registered: {tf_filename} (from STF: {stf_filename}, tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
+        self.logger.info(f"Handling TF sub sample: {tf_filename} (from STF: {stf_filename}, tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
                          extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
 
-        # Get num_tf_per_slice from workflow params
-        workflow_params = self._get_workflow_params(
-            message_data.get('run_id') or self.current_run_id,
-            message_data.get('execution_id') or self.current_execution_id
-        )
-        fast_processing = workflow_params.get('fast_processing', {})
-        num_tf_per_slice = fast_processing.get('num_tf_per_slice', 2)
-        epic_version = fast_processing.get('epic_version', None)
-        if isinstance(epic_version, str) and epic_version.lower() == 'none':
-            epic_version = None
+        num_tf_per_slice = fast_processing.get('num_tf_per_slice', self.config.get('tfs_per_subsample', 2))
+        
         epic_image = fast_processing.get('epic_image', None)
         if isinstance(epic_image, str) and epic_image.lower() == 'none':
             epic_image = None
-        processor_type = fast_processing.get('processor_type', None)
+        if epic_image:
+            epic_version = fast_processing.get('epic_version', None)
+            if isinstance(epic_version, str) and epic_version.lower() == 'none':
+                epic_version = None
+            self.logger.info(f"Using epic_image from workflow params: {epic_image}, epic_version: {epic_version}",
+                             extra=self._log_extra(epic_image=epic_image, epic_version=epic_version))
+        else:
+            epic_image = self.config.get('epic_image', None)
+            if isinstance(epic_image, str) and epic_image.lower() == 'none':
+                epic_image = None
+            epic_version = self.config.get('epic_version', None)
+            if isinstance(epic_version, str) and epic_version.lower() == 'none':
+                epic_version = None
+            self.logger.info(f"No epic_image specified in workflow params. Using default epic_image: {epic_image}, epic_version: {epic_version}",
+                             extra=self._log_extra(epic_image=epic_image, epic_version=epic_version))
+
+        processor_type = fast_processing.get('processor_type', self.config.get('processor_type', None))
         if isinstance(processor_type, str) and processor_type.lower() == 'none':
             processor_type = None
-        dest_path = fast_processing.get('dest_path', None) or self.default_dest_path
+        dest_path = fast_processing.get('dest_path', self.config.get('dest_path', None)) or self.default_dest_path
 
         run_id = message_data.get('run_id')
 
@@ -484,6 +588,9 @@ class FastProcessingAgent(BaseAgent):
             'stf_filename': stf_filename,
             'slices_created': len(slices)
         })
+
+        self.stats['tf_files_processed'] += 1
+        self.tf_files_processed += 1
 
     def handle_pause_run(self, message_data):
         """Handle pause_run: Update RunState to standby."""
@@ -513,10 +620,10 @@ class FastProcessingAgent(BaseAgent):
 
         self.logger.info(
             f"Run ended: run_id={message_data.get('run_id') or self.current_run_id}, "
-            f"tf_files_received={self.stats['tf_files_received']}, "
+            f"tf_files_processed={self.stats['tf_files_processed']}, "
             f"slices_created={self.stats['slices_created']}",
             extra=self._log_extra(total_stf=total_stf,
-                                  tf_files_received=self.stats['tf_files_received'],
+                                  tf_files_processed=self.stats['tf_files_processed'],
                                   slices_created=self.stats['slices_created'])
         )
 
@@ -524,7 +631,7 @@ class FastProcessingAgent(BaseAgent):
 
         self._log_system_event('end_run', {
             'execution_id': self.current_execution_id,
-            'total_tf_files_received': self.stats['tf_files_received'],
+            'total_tf_files_processed': self.stats['tf_files_processed'],
             'total_slices_created': self.stats['slices_created'],
             'total_slices_sent': self.stats['slices_sent']
         })

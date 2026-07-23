@@ -55,7 +55,43 @@ name = "stf_datataking"
 config = "fast_processing_default"
 realtime = true
 
+version = "1.0"
+description = "STF datataking workflow for fast processing"
+# includes = ["daq_state_machine.toml"]
+includes = ["daq_state_machine_panda_test.toml"]
+
 # Optional parameter overrides
 # [parameters]
 # stf_count = 5
 # physics_period_count = 2
+
+[fast_processing]
+# If the workflow doesn't define these parameters, the Fast processing agent will load parameters from here.
+# Count-based STF generation
+stf_count = 10                  # Generate exactly 10 STF files
+physics_period_count = 1        # Single physics period
+
+# Fast processing parameters
+target_worker_count = 30        # Target number of workers for processing
+memory_per_core = 6000          # Memory per core
+stf_sampling_rate = 1.0         # Fraction of STF data sampled by FastMon (100% for testing)
+slice_processing_time = 30      # Time to process one slice (seconds)
+worker_rampup_time = 300        # Time to bring workers online (seconds, 5 min)
+worker_rampdown_time = 60       # Time for graceful worker shutdown (seconds)
+
+# FastMon agent parameters
+selection_fraction = 0.1        # Fraction of STF files to sample (10%)
+tf_files_per_stf = 7            # Number of TF files to generate per STF
+tf_size_fraction = 0.15         # Fraction of partition TF count per subsample (with gaussian noise)
+tf_count_per_stf = 1000         # Default total TF count per STF if not provided in stf_ready message
+tf_sequence_start = 1           # Starting sequence number for TF files
+no_duplicate_mode = false        # Set true to skip notification for already-registered TF files
+run_id_lifetime = 2             # Days to keep run_id in runs_sampled cache
+slices_per_sample = 5          # Number of TF slices per STF sample
+dest_path = '/gpfs02/eic/panda/jobs/'  # output destination path
+# epic_version = "26.03.0"
+# epic_image = "/cvmfs/singularity.opensciencegrid.org/eicweb/eic_xl:26.06.0-stable"
+epic_version = "26.07.0"
+epic_image = "/cvmfs/singularity.opensciencegrid.org/eicweb/eic_xl:26.07.0-stable"
+
+processor_type = "zeromq"        # none or zeromq
