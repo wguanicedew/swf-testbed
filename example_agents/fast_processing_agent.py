@@ -599,7 +599,8 @@ class FastProcessingAgent(BaseAgent):
 
         # Create TF slices from this TF sample
         slices = self._create_tf_slices(run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
-
+        self.stats['slices_created'] += len(slices)
+        
         # Push each slice to transformer queue
         for slice_data in slices:
             self._send_slice_to_queue(run_id, slice_data, epic_version=epic_version, epic_image=epic_image, processor_type=processor_type, file_type=file_type)
