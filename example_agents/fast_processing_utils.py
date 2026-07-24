@@ -76,7 +76,8 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
     try:
         selection_fraction = fast_processing.get("selection_fraction", config.get("selection_fraction", 1.0))
         if not force_sample and random.random() >= selection_fraction:
-            logger.debug(f"STF file {stf_file.get('filename')} skipped by selection_fraction={selection_fraction}")
+            # logger.debug(f"STF file {stf_file.get('filename')} skipped by selection_fraction={selection_fraction}")
+            logger.debug(f"STF file skipped by selection_fraction={selection_fraction}")
             return []
 
         tf_size_fraction = fast_processing.get("tf_size_fraction", config.get("tf_size_fraction", 0.15))
@@ -166,7 +167,8 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
         if existing:
             match = next((r for r in existing if r.get('tf_filename') == tf_filename), None)
             if match:
-                logger.info(f"TF file {tf_filename} already registered with ID {match.get('tf_file_id')}, skipping")
+                # logger.debug(f"TF file {tf_filename} already registered with ID {match.get('tf_file_id')}, skipping registration")
+                logger.info(f"TF file already registered with ID {match.get('tf_file_id')}, skipping registration", extra={'tf_filename': tf_filename, 'tf_file_id': match.get('tf_file_id')})
                 return {**match, '_already_registered': True}
 
         # Create TF file record via FastMonFile API

@@ -534,7 +534,7 @@ class FastProcessingAgent(BaseAgent):
                 tf_files_created += 1
                 already_registered = tf_file.get('_already_registered', False)
                 if not (no_duplicate_mode and already_registered):
-                    slice_message = {
+                    tf_sub_message = {
                         'tf_filename': tf_file.get('tf_filename'),
                         'stf_filename': tf_file.get('stf_file') or message_data.get('filename'),
                         'tf_first': tf_file.get('tf_first'),
@@ -544,14 +544,17 @@ class FastProcessingAgent(BaseAgent):
                         'run_id': message_data.get('run_id'),
                         'execution_id': message_data.get('execution_id') or self.current_execution_id,
                     }
-                    self.handle_slice(slice_message, fast_processing)
+                    self.handle_slice(tf_sub_message, fast_processing)
             tf_files_processed.append(tf_file)
 
         # Update TF creation stats
         self.stats['tf_files_created'] += tf_files_created
 
-        self.logger.info(f"Processed {tf_files_created} TF sub samples for STF file {message_data.get('filename')}",
-                        extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
+
+        # self.logger.info(f"Processed {tf_files_created} TF sub samples for STF file {message_data.get('filename')}",
+        #                  extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
+        self.logger.info(f"Processed {tf_files_created} TF sub samples",
+                         extra=self._log_extra(stf_filename=message_data.get('filename'), tf_files_created=tf_files_created))
         return tf_files_processed
     
     def handle_slice(self, message_data, fast_processing=None):
@@ -566,8 +569,11 @@ class FastProcessingAgent(BaseAgent):
         tf_count = message_data.get('tf_count')
         file_type = message_data.get('file_type')
 
-        self.logger.info(f"Handling TF sub sample: {tf_filename} (from STF: {stf_filename}, tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
+        # self.logger.info(f"Handling TF sub sample: {tf_filename} (from STF: {stf_filename}, tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
+        #                  extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
+        self.logger.info(f"Handling TF sub sample: {tf_filename} (tf_first={tf_first}, tf_last={tf_last}, tf_count={tf_count})",
                          extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
+        
 
         num_tf_per_slice = fast_processing.get('num_tf_per_slice', self.config.get('tfs_per_subsample', 2))
         
@@ -965,7 +971,7 @@ class FastProcessingAgent(BaseAgent):
 
             self.stats['slices_sent'] += 1
             self.logger.info(
-                f"Slice sent to queue: {slice_data['tf_filename']} -> {self.TRANSFORMER_QUEUE}",
+                f"Slice sent to queue -> {self.TRANSFORMER_QUEUE}",
                 extra=self._log_extra(tf_filename=slice_data['tf_filename'], destination=self.TRANSFORMER_QUEUE)
             )
         except Exception as e:
