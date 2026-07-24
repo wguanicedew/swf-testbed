@@ -7,7 +7,7 @@ System design and components of the SWF Testbed.
 The testbed plan is based on ePIC streaming computing model WG discussions
 in the streaming computing model meeting[^1], guided by the ePIC streaming
 computing model report[^2], and the ePIC workflow management system
-requirements draft[^3].
+requirements[^3].
 
 ## Testbed plan
 
@@ -62,9 +62,9 @@ The repositories mapping to testbed components are:
 
 ### [swf-monitor](https://github.com/BNLNPPS/swf-monitor)
 
-A web service providing system monitoring and comprehensive information about the testbed's state, both via browser-based dashboards and a json based REST API.
+The common monitor, web, and database services of the swf platform, serving the testbed and the epicprod production system: browser-based dashboards, a JSON REST API, and the database-backed state beneath them.
 
-This module manages the databases used by the testbed, and offers a REST API for other agents in the system to report status and retrieve information. It acts as a listener for the ActiveMQ message broker, receiving messages from other agents, storing relevant data in the database and presenting message histories in the monitor. It hosts a Model Context Protocol (MCP) server for the agents to share information with LLM clients to create an intelligent assistant for the testbed.
+This module manages the databases used by the testbed, and offers a REST API for other agents in the system to report status and retrieve information. It acts as a listener for the ActiveMQ message broker, receiving messages from other agents, storing relevant data in the database and presenting message histories in the monitor. It hosts a Model Context Protocol (MCP) server for the agents to share information with LLM clients to create an intelligent assistant for the testbed. Production applications ship from [swf-epicprod](https://github.com/BNLNPPS/swf-epicprod) and run installed within the monitor's runtime.
 
 ### [swf-daqsim-agent](https://github.com/BNLNPPS/swf-daqsim-agent)
 
@@ -259,7 +259,7 @@ graph LR
 
 [^2]: [ePIC streaming computing model report](https://zenodo.org/records/14675920)
 
-[^3]: [ePIC workflow management system requirements draft](https://docs.google.com/document/d/1OmAGzFgZgEP6ntuRkP51kiOqF_0uh_RPjq8wgdTwb2A/edit?tab=t.0#heading=h.g1vlz8vqp7ht)
+[^3]: [ePIC workflow management system requirements](https://www.overleaf.com/project/67bdf89a3d44a138da503dea)
 
 [^4]: [ePIC streaming workflow testbed planning document](https://docs.google.com/document/d/1mPqMsjHiymkeAB7uih_8TjFIluwM8MENIWZF3EDwNrU/edit?tab=t.0)
 

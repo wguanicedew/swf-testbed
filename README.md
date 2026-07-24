@@ -1,11 +1,18 @@
 # swf-testbed
 
-This is the umbrella repository for the ePIC streaming workflow testbed.
+This is the umbrella repository for the ePIC streaming workflow testbed: the streaming workflow
+application of the swf platform. Its production peer is
+[swf-epicprod](https://github.com/BNLNPPS/swf-epicprod); both ride the common platform in
+[swf-monitor](https://github.com/BNLNPPS/swf-monitor) and
+[swf-common-lib](https://github.com/BNLNPPS/swf-common-lib).
 
 ## Documentation
 
+- [**ePIC WFMS Documentation**](https://epic-wfms-docs.readthedocs.io) - Official system-level documentation for the ePIC Workflow Management System, of which the testbed is the streaming implementation front
+
 ### Release Notes
 - [**Release Notes**](RELEASE_NOTES.md) - What's new in each version
+- [**Preparing a Release**](docs/releases.md) - Scope and procedure for an SWF vNN release
 
 ### Getting Started
 - [**Installation Guide**](docs/installation.md) - Complete setup instructions
@@ -14,9 +21,11 @@ This is the umbrella repository for the ePIC streaming workflow testbed.
 ### Operations
 - [**Running the Testbed**](docs/operations.md) - Starting, stopping, and monitoring services
 - [**Workflow Orchestration**](docs/workflows.md) - Running and managing workflows
+- [**The E0-E1 Interface**](docs/e0-e1-interface.md) - The interface as understood in 2026: architecture, definitions, open questions, development path
+- [**The E0-E1 State Machine**](docs/e0-e1-state-machine.md) - The datataking state model at the E0-E1 interface
 - [**Monitor Integration**](docs/monitor.md) - Web interface and API usage
 - [**MCP Integration**](../swf-monitor/docs/MCP.md) - Model Context Protocol for LLM interaction
-- [**PCS (Physics Configuration System)**](../swf-monitor/docs/PCS.md) - Production metadata tags for MC campaigns
+- [**PCS (Physics Configuration System)**](../swf-epicprod/docs/PCS.md) - Production configuration and campaign records, in the [swf-epicprod](https://github.com/BNLNPPS/swf-epicprod) production domain
 - [**SSE Real-Time Streaming**](docs/sse-streaming.md) - Remote workflow event monitoring via HTTPS
 - [**Production Deployment**](../swf-monitor/docs/PRODUCTION_DEPLOYMENT.md) - Apache production deployment guide
 
@@ -37,4 +46,3 @@ claude mcp add --transport http swf-testbed https://pandaserver02.sdcc.bnl.gov/s
 ### Development
 - [**Development Guide**](docs/development.md) - Contributing and development workflow
 - [**AI Memory**](docs/ai-memory.md) - Cross-session dialogue persistence (experimental)
-

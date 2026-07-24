@@ -15,7 +15,7 @@ coordination to maintain system stability and integration.
 The testbed is composed of three core repositories that must be kept as siblings:
 
 - **swf-testbed**: Core testbed infrastructure, CLI, and orchestration
-- **swf-monitor**: Django web application for monitoring and data management
+- **swf-monitor**: the platform's common monitor, web, and database services (Django)
 - **swf-common-lib**: Shared utilities and common code
 
 Additional repositories will be added as the testbed expands with new agents,
@@ -84,7 +84,11 @@ git push origin feature/your-feature-name
 2. **Reference related PRs** in other repositories when applicable
 3. **Ensure tests pass** across all affected repositories
 4. **Coordinate merge timing** for cross-repo infrastructure changes
-5. **Clean up branches** after successful merges
+5. **Retain baseline branches** after successful merges
+
+The system-wide release boundary, repository scope, release-note standard, and
+publication sequence are documented in [Preparing an SWF vNN
+Release](releases.md).
 
 This workflow ensures that the testbed remains stable and integrated while
 allowing for rapid infrastructure development and feature additions.
@@ -142,4 +146,3 @@ python my_agent.py          # Quiet mode (default)
   of ePIC data, corresponding to ~2GB. The STF is the atomic unit of
   streaming data processing.
 - TF: time frame. Atomic unit of ePIC detector readout ~0.6ms in duration.
-

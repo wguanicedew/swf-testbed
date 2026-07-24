@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration-test:
+    uses: ./.github/workflows/integration-test.yml
+    with:
+      # Use the exact commit that triggered this run so PRs test their own code.
+      swf_testbed_repo: ${{ github.repository }}
+      swf_testbed_ref: ${{ github.sha }}
+      swf_monitor_ref: main

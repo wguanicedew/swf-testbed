@@ -31,25 +31,36 @@ xrd_folder = '/pnfs/sdcc.bnl.gov/eic/epic/disk/swfdaqtest/'
 # Generic imports
 import os, sys, time, json
 import requests, urllib3
+import uuid
 from datetime import datetime
 
 # Rucio imports
-from rucio.client.client        import Client
+from rucio.client               import Client as RucioClient
 from rucio.client.replicaclient import ReplicaClient
 from rucio.client.didclient     import DIDClient
+from rucio.client.uploadclient  import UploadClient
 from rucio.common.exception     import DataIdentifierAlreadyExists, RSENotFound
 
-# Common lib imports
-RUCIO_COMMS_PATH    = ''
+# Common lib imports – prefer the packaged rucio_utils; fall back to legacy rucio_comms
+_USE_RUCIO_UTILS = False
 try:
-    RUCIO_COMMS_PATH = os.environ['RUCIO_COMMS_PATH']
-    print(f'''*** The RUCIO_COMMS_PATH is defined in the environment: {RUCIO_COMMS_PATH}, will be added to sys.path ***''')
-    sys.path.append(RUCIO_COMMS_PATH)
-except KeyError:
-    print('*** The variable RUCIO_COMMS_PATH is undefined, will rely on PYTHONPATH ***')
-print(f'''*** Set the Python path: {sys.path} ***''')
+    from swf_common_lib.rucio_utils import (
+        calculate_adler32_from_file, register_file_on_rse,
+        create_dataset, add_files_to_dataset,
+    )
+    _USE_RUCIO_UTILS = True
+except ImportError:  # Deprecated: legacy rucio_comms imports, to be removed in a future version
+    RUCIO_COMMS_PATH    = ''
+    try:
+        RUCIO_COMMS_PATH = os.environ['RUCIO_COMMS_PATH']
+        print(f'''*** The RUCIO_COMMS_PATH is defined in the environment: {RUCIO_COMMS_PATH}, will be added to sys.path ***''')
+        sys.path.append(RUCIO_COMMS_PATH)
+    except KeyError:
+        print('*** The variable RUCIO_COMMS_PATH is undefined, will rely on PYTHONPATH ***')
+    print(f'''*** Set the Python path: {sys.path} ***''')
 
-from rucio_comms.utils          import calculate_adler32_from_file, register_file_on_rse, RucioUtils
+    from rucio_comms.utils          import calculate_adler32_from_file, register_file_on_rse
+    print('*** Imported rucio helpers from rucio_comms.utils (legacy fallback) ***')
 from swf_common_lib.base_agent import BaseAgent
 from swf_common_lib.api_utils import ensure_namespace
 
@@ -128,16 +139,6 @@ class DATA(BaseAgent):
     def init_rucio(self):
         ''' Initialize the Rucio module.
         '''
- 
-        from rucio_comms import DatasetManager, RucioClient, UploadClient, FileManager
-        # ---
-        try:
-            from rucio_comms import DatasetManager, RucioClient, UploadClient, FileManager
-            if self.verbose: print(f'''*** Successfully imported classes from rucio_comms ***''')
-        except:
-            print('*** Failed to import the classes from rucio_comms, exiting...***')
-            exit(-1)
-
 
         # A Rucio client will be needed for any operation with Rucio
         if self.verbose: print(f'''*** Instantiating the RucioClient and UploadClient ***''')
@@ -151,6 +152,14 @@ class DATA(BaseAgent):
         except Exception as e:
             print(f'*** Failed to instantiate the RucioClient, UploadClient and DIDClient: {e}, exiting... ***')
             exit(-1)
+
+        if _USE_RUCIO_UTILS:
+            # Using standalone functions from swf_common_lib.rucio_utils –
+            # no DatasetManager / FileManager instances needed.
+            return
+
+        # Deprecated: fall back to legacy rucio_comms class-based managers
+        from rucio_comms import DatasetManager, FileManager
 
         # A Dataset Manager will be needed for any operation with Rucio datasets
         if self.verbose: print(f'''*** Instantiating the Dataset Manager ***''')
@@ -185,8 +194,11 @@ class DATA(BaseAgent):
         msg['msg_type']     = 'stf_ready'
         msg['run_id']       = self.run_id
         
+        # Include execution_id if available to maintain workflow context
+        if hasattr(self, 'current_execution_id') and self.current_execution_id:
+            msg['execution_id'] = self.current_execution_id
+
         return msg
-        #return json.dumps(msg)
  
 
     # ---
@@ -198,6 +210,11 @@ class DATA(BaseAgent):
         try:
             message_data = json.loads(msg.body)
             
+            # Capture execution_id if provided for logging and propagation
+            exec_id = message_data.get('execution_id')
+            if exec_id:         
+                self.current_execution_id = exec_id
+
             msg_type = message_data.get('msg_type')
             msg_namespace = message_data.get('namespace')
             # Debug only: print(f'===================================> {msg_type}')
@@ -242,12 +259,18 @@ class DATA(BaseAgent):
         
         self.run_id     = run_id
         self.dataset    = message_data.get('dataset')
+        container       = message_data.get('container')
+        if container:
+            self.data_folder = container
         self.folder     = f"{self.data_folder}/{self.dataset}"
 
         if self.verbose: print(f'''*** Current dataset set to {self.dataset}, folder set to {self.folder} ***''')
         
         lifetime = 7 # days
-        result = self.dataset_manager.create_dataset(dataset_name=f'''{self.rucio_scope}:{self.dataset}''', lifetime_days=lifetime, open_dataset=True)
+        if _USE_RUCIO_UTILS:
+            result = create_dataset(dataset_name=f'''{self.rucio_scope}:{self.dataset}''', lifetime_days=lifetime, open_dataset=True, client=self.rucio_client)
+        else:  # Deprecated: legacy rucio_comms class-based managers
+            result = self.dataset_manager.create_dataset(dataset_name=f'''{self.rucio_scope}:{self.dataset}''', lifetime_days=lifetime, open_dataset=True)
         if self.verbose: print(f'''*** Dataset {self.dataset}, creation result: {result} ***''')
         if not result:
             if self.verbose: print('*** Dataset creation failed, exiting... ***')
@@ -352,16 +375,17 @@ class DATA(BaseAgent):
         # N.B. Rucio does not accept large integers so mind the run ID
         self.rucio_did_client.set_metadata(scope=self.rucio_scope, name=fn, key='run_number', value=self.run_id)
 
-        guid = RucioUtils.generate_guid()
-        formatted_guid = RucioUtils.format_guid(guid)
-        print(f'''*** Generated GUID: {guid}, formatted GUID for Rucio: {formatted_guid} ***''')
-        self.rucio_did_client.set_metadata(scope=self.rucio_scope, name=fn, key='guid', value=formatted_guid)
+        guid = str(uuid.uuid4())
+        self.rucio_did_client.set_metadata(scope=self.rucio_scope, name=fn, key='guid', value=guid)
 
         # Attach the file to the open dataset
         if self.verbose: print(f'''*** Adding a file with lfn: {fn} to the scope/dataset: {self.rucio_scope}:{self.dataset} ***''')
 
         # Register the file replica, using the lfn
-        attachment_success = self.file_manager.add_files_to_dataset([f'''{self.rucio_scope}:{fn}'''], f'''{self.rucio_scope}:{self.dataset}''')
+        if _USE_RUCIO_UTILS:
+            attachment_success = add_files_to_dataset([f'''{self.rucio_scope}:{fn}'''], f'''{self.rucio_scope}:{self.dataset}''', client=self.rucio_client)
+        else:  # Deprecated: legacy rucio_comms class-based managers
+            attachment_success = self.file_manager.add_files_to_dataset([f'''{self.rucio_scope}:{fn}'''], f'''{self.rucio_scope}:{self.dataset}''')
         if self.verbose: print(f'''*** File attached to dataset: {attachment_success} ***''')
 
         if self.count == 0:
@@ -540,6 +564,14 @@ if __name__ == "__main__":
         print(f'''*** {'RSE for upload          ':<20} {rse:>20} ***''')
     # ---
 
-    data = DATA(verbose=verbose, mqxmit=mqxmit, xrdup=xrdup, rucio_scope=scope, data_folder=datadir, rse=rse)
+    data = DATA(
+        config_path=os.getenv('SWF_TESTBED_CONFIG'),
+        verbose=verbose,
+        mqxmit=mqxmit,
+        xrdup=xrdup,
+        rucio_scope=scope,
+        data_folder=datadir,
+        rse=rse
+    )
 
     data.run()
