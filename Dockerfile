@@ -46,7 +46,13 @@ RUN git clone --depth 1 --branch "${SNAPPER_AI_REF}" \
         https://github.com/BNLNPPS/snapper-ai.git /build/snapper-ai \
     && pip install --no-cache-dir /build/snapper-ai
 
-# 5. swf-testbed itself (typer CLI, supervisor, psutil, simpy, etc.)
+# 5. site-canary (the swf-testbed meta-package requires site-canary[store]).
+ARG SITE_CANARY_REF=main
+RUN git clone --depth 1 --branch "${SITE_CANARY_REF}" \
+        https://github.com/BNLNPPS/site-canary.git /build/site-canary \
+    && pip install --no-cache-dir "/build/site-canary[store]"
+
+# 6. swf-testbed itself (typer CLI, supervisor, psutil, simpy, etc.)
 RUN pip install --no-cache-dir /build/swf-testbed
 
 # --------------- runtime stage: slim image -----------------------------------
@@ -81,4 +87,5 @@ COPY swf-testbed/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
+# Default workflow; docker-compose.yml overrides this via TESTBED_WORKFLOW.
 CMD ["testbed", "run"]
