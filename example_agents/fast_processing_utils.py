@@ -103,7 +103,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
             tf_first = random.randint(partition_start, max_start) if max_start > partition_start else partition_start
             tf_last = tf_first + sample_size - 1
 
-            tf_filename = f"{base_filename}_tf_{sequence_number:03d}.tf"
+            tf_filename = f"{base_filename}_tf_{stf_file.get('run_id')}_{sequence_number:03d}.tf"
 
             tf_metadata = {
                 "tf_filename": tf_filename,
@@ -112,6 +112,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
                 "tf_count": tf_last - tf_first + 1,
                 "file_size_bytes": tfs_per_subsample,
                 "sequence_number": sequence_number,
+                "run_id": stf_file.get("run_id"),
                 "stf_parent": stf_file.get("filename"),
                 "metadata": {
                     "simulation": True,
@@ -163,7 +164,8 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
         
         # Check if TF file already registered
         tf_filename = tf_metadata["tf_filename"]
-        existing = agent.call_monitor_api('GET', f'/fastmon-files/?tf_filename={tf_filename}')
+        run_id = tf_metadata.get("run_id")
+        existing = agent.call_monitor_api('GET', f'/fastmon-files/?run_id={run_id}&tf_filename={tf_filename}')
         if existing:
             match = next((r for r in existing if r.get('tf_filename') == tf_filename), None)
             if match:
@@ -179,4 +181,30 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
         
     except Exception as e:
         logger.error(f"Error recording TF file {tf_metadata['tf_filename']}: {e}")
+        return {}
+
+
+def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.Logger) -> Dict[str, Any]:
+    """
+    Update the status of a TF file (FastMonFile) in the database using REST API.
+
+    Args:
+        tf_file_id: Primary key of the FastMonFile record
+        status: New status value (see FileStatus)
+        agent: BaseAgent instance for API access
+        logger: Logger instance
+
+    Returns:
+        Updated FastMonFile data dictionary, or empty dict if failed
+    """
+    if not tf_file_id or tf_file_id == 'unknown':
+        logger.error(f"Cannot update TF file status: missing tf_file_id (status={status})")
+        return {}
+
+    try:
+        result = agent.call_monitor_api('PATCH', f'/fastmon-files/{tf_file_id}/', {'status': status})
+        logger.debug(f"Updated TF file status to {status}", extra={'tf_file_id': tf_file_id, 'status': status})
+        return result
+    except Exception as e:
+        logger.error(f"Error updating TF file status for {tf_file_id}: {e}")
         return {}

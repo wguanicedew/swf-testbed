@@ -16,6 +16,7 @@ import os
 import signal
 import time
 import logging
+import threading
 import traceback
 import json
 import uuid
@@ -66,6 +67,13 @@ class FastProcessingAgent(BaseAgent):
         self.stf_messages_processed = 0
         self.last_message_time = None
         self.runs_sampled = {}  # run_id -> datetime when first sampled
+
+        # handle_stf_ready/handle_slice_result run concurrently on the background
+        # worker pool (see on_message). This guards only the shared counter/dict
+        # updates (stats, runs_sampled, workflow_params_cache) those handlers
+        # touch — the blocking REST calls in between stay unlocked so the pool's
+        # multiple workers can actually overlap.
+        self._state_lock = threading.Lock()
 
         # Statistics
         self.stats = {
@@ -370,7 +378,9 @@ class FastProcessingAgent(BaseAgent):
             elif msg_type == 'start_run':
                 self.handle_start_run(message_data)
             elif msg_type == 'stf_ready':
-                self.handle_stf_ready(message_data)
+                # Offloaded: loops over TF sub-samples doing blocking REST calls
+                # (record_tf_file, update_tf_file_status, ...) per stf_ready message.
+                self.run_in_background(self.handle_stf_ready, message_data, label='stf_ready')
             elif msg_type == 'pause_run':
                 self.handle_pause_run(message_data)
             elif msg_type == 'resume_run':
@@ -378,7 +388,8 @@ class FastProcessingAgent(BaseAgent):
             elif msg_type == 'end_run':
                 self.handle_end_run(message_data)
             elif msg_type == 'slice_result':
-                self.handle_slice_result(message_data)
+                # Offloaded: updates the TFSlice record via a blocking REST call.
+                self.run_in_background(self.handle_slice_result, message_data, label='slice_result')
             else:
                 self.logger.debug(f"Ignoring message type: {msg_type}")
         except Exception as e:
@@ -495,10 +506,15 @@ class FastProcessingAgent(BaseAgent):
         """
         self.logger.info("Processing stf_ready message", extra=self._log_extra())
 
+        run_id = message_data.get('run_id')
+
         # Update message tracking stats
-        self.last_message_time = datetime.now()
-        self.stf_messages_processed += 1
-        self.stats['total_stf_messages'] += 1
+        with self._state_lock:
+            self.last_message_time = datetime.now()
+            self.stf_messages_processed += 1
+            self.stats['total_stf_messages'] += 1
+
+            force_sample = run_id not in self.runs_sampled
 
         tf_files_processed = []
         self.logger.debug(f"Message data received: {message_data}", extra=self._log_extra())
@@ -513,14 +529,13 @@ class FastProcessingAgent(BaseAgent):
         )
         fast_processing = workflow_params.get('fast_processing', {})
 
-        run_id = message_data.get('run_id')
-        force_sample = run_id not in self.runs_sampled
         tf_subsamples = fast_processing_utils.simulate_tf_subsamples(message_data, fast_processing,self.config, self.logger, self.agent_name,
                                                                      force_sample=force_sample)
 
         if tf_subsamples and run_id:
-            self.runs_sampled[run_id] = datetime.now()
-            self._expire_runs_sampled()
+            with self._state_lock:
+                self.runs_sampled[run_id] = datetime.now()
+                self._expire_runs_sampled()
 
         # Record each TF file in the FastMonFile table
         # TODO: register in bulk
@@ -545,10 +560,14 @@ class FastProcessingAgent(BaseAgent):
                         'execution_id': message_data.get('execution_id') or self.current_execution_id,
                     }
                     self.handle_slice(tf_sub_message, fast_processing)
+                    fast_processing_utils.update_tf_file_status(
+                        tf_file.get('tf_file_id'), fast_processing_utils.FileStatus.PROCESSING, self, self.logger
+                    )
             tf_files_processed.append(tf_file)
 
         # Update TF creation stats
-        self.stats['tf_files_created'] += tf_files_created
+        with self._state_lock:
+            self.stats['tf_files_created'] += tf_files_created
 
 
         # self.logger.info(f"Processed {tf_files_created} TF sub samples for STF file {message_data.get('filename')}",
@@ -605,8 +624,7 @@ class FastProcessingAgent(BaseAgent):
 
         # Create TF slices from this TF sample
         slices = self._create_tf_slices(run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
-        self.stats['slices_created'] += len(slices)
-        
+
         # Push each slice to transformer queue
         for slice_data in slices:
             self._send_slice_to_queue(run_id, slice_data, epic_version=epic_version, epic_image=epic_image, processor_type=processor_type, file_type=file_type)
@@ -621,8 +639,10 @@ class FastProcessingAgent(BaseAgent):
             'slices_created': len(slices)
         })
 
-        self.stats['tf_files_processed'] += 1
-        self.tf_files_processed += 1
+        with self._state_lock:
+            self.stats['slices_created'] += len(slices)
+            self.stats['tf_files_processed'] += 1
+            self.tf_files_processed += 1
 
     def handle_pause_run(self, message_data):
         """Handle pause_run: Update RunState to standby."""
@@ -706,7 +726,8 @@ class FastProcessingAgent(BaseAgent):
     def handle_slice_result(self, message_data):
         """Process slice_result messages from transformer workers."""
         logging.info(f"Received slice_result message: {message_data}")
-        self.stats['results_received'] += 1
+        with self._state_lock:
+            self.stats['results_received'] += 1
 
         content = message_data.get('content', {})
         result = content.get('result') if isinstance(content, dict) else None
@@ -724,10 +745,11 @@ class FastProcessingAgent(BaseAgent):
                 inner_result = result.get('result') if isinstance(result.get('result'), dict) else None
 
             state = content.get('state') or (inner_result.get('state') if inner_result else None)
-            if state == 'done' or (inner_result and inner_result.get('processed')):
-                self.stats['results_done'] += 1
-            else:
-                self.stats['results_failed'] += 1
+            with self._state_lock:
+                if state == 'done' or (inner_result and inner_result.get('processed')):
+                    self.stats['results_done'] += 1
+                else:
+                    self.stats['results_failed'] += 1
         except Exception:
             pass
 
@@ -758,29 +780,33 @@ class FastProcessingAgent(BaseAgent):
         """
         now = datetime.now(timezone.utc)
 
-        # Evict all stale entries on every access
-        expired_keys = [k for k, v in self.workflow_params_cache.items() if now >= v['expires_at']]
-        for k in expired_keys:
-            del self.workflow_params_cache[k]
-            self.logger.debug(f"Workflow params cache expired for run_id={k}")
+        with self._state_lock:
+            # Evict all stale entries on every access
+            expired_keys = [k for k, v in self.workflow_params_cache.items() if now >= v['expires_at']]
+            for k in expired_keys:
+                del self.workflow_params_cache[k]
+                self.logger.debug(f"Workflow params cache expired for run_id={k}")
 
-        entry = self.workflow_params_cache.get(run_id)
-        if entry:
-            # Refresh expiry on access
-            lifetime_hours = entry['params'].get('cache_lifetime_hours', 24)
-            entry['expires_at'] = now + timedelta(hours=lifetime_hours)
-            return entry['params']
+            entry = self.workflow_params_cache.get(run_id)
+            if entry:
+                # Refresh expiry on access
+                lifetime_hours = entry['params'].get('cache_lifetime_hours', 24)
+                entry['expires_at'] = now + timedelta(hours=lifetime_hours)
+                return entry['params']
 
         if execution_id is None:
             return {}
 
+        # Fetch (blocking REST call) outside the lock so concurrent callers for
+        # different run_ids don't serialize on it; only the cache write is locked.
         params = self._fetch_workflow_parameters(execution_id)
         if params:
             lifetime_hours = params.get('cache_lifetime_hours', 24)
-            self.workflow_params_cache[run_id] = {
-                'params': params,
-                'expires_at': now + timedelta(hours=lifetime_hours)
-            }
+            with self._state_lock:
+                self.workflow_params_cache[run_id] = {
+                    'params': params,
+                    'expires_at': now + timedelta(hours=lifetime_hours)
+                }
             self.logger.debug(f"Workflow params cached for run_id={run_id}, lifetime={lifetime_hours}h")
         return params
 
@@ -1029,7 +1055,7 @@ class FastProcessingAgent(BaseAgent):
             # Build update payload
             update_data = {
                 'status': slice_status,
-                'processed_at': content.get('processed_at') or datetime.now().isoformat(),
+                'completed_at': content.get('processed_at') or datetime.now().isoformat(),
                 'metadata': {
                     'worker_hostname': content.get('hostname'),
                     'panda_task_id': content.get('panda_task_id'),
@@ -1040,17 +1066,21 @@ class FastProcessingAgent(BaseAgent):
                 }
             }
 
-            # Update the slice directly using slice_id from the message
+            # Update the slice directly using tf_filename+slice_id from the message.
+            # (tf_filename, slice_id) is the model's unique_together key: slice_id is
+            # only a 0-14 serial within a TF file, so filtering by run_id+slice_id alone
+            # is ambiguous once a run has more than one TF file.
             run_id = message_data.get('run_id')
             try:
-                # Query for the slice by run_id and slice_id to get the database ID
                 slices = self.call_monitor_api(
                     'GET',
-                    f'/tf-slices/?run_number={run_id}&slice_id={slice_id}'
+                    f'/tf-slices/?tf_filename={tf_filename}&slice_id={slice_id}'
                 )
 
                 if slices and isinstance(slices, list) and len(slices) > 0:
-                    db_id = slices[0].get('id')
+                    match = next((s for s in slices
+                                  if s.get('tf_filename') == tf_filename and s.get('slice_id') == slice_id), slices[0])
+                    db_id = match.get('id')
                     if db_id:
                         # Update the slice using database ID
                         api_result = self.call_monitor_api(
