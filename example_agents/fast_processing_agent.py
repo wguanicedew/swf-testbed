@@ -551,6 +551,7 @@ class FastProcessingAgent(BaseAgent):
                 if not (no_duplicate_mode and already_registered):
                     tf_sub_message = {
                         'tf_filename': tf_file.get('tf_filename'),
+                        'tf_file_id': tf_file.get('tf_file_id'),
                         'stf_filename': tf_file.get('stf_file') or message_data.get('filename'),
                         'tf_first': tf_file.get('tf_first'),
                         'tf_last': tf_file.get('tf_last'),
@@ -582,6 +583,7 @@ class FastProcessingAgent(BaseAgent):
         """
         fast_processing = fast_processing or {}
         tf_filename = message_data.get('tf_filename')
+        tf_file_id = message_data.get('tf_file_id')
         stf_filename = message_data.get('stf_filename')
         tf_first = message_data.get('tf_first', 0)
         tf_last = message_data.get('tf_last')
@@ -623,7 +625,7 @@ class FastProcessingAgent(BaseAgent):
         run_id = message_data.get('run_id')
 
         # Create TF slices from this TF sample
-        slices = self._create_tf_slices(run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
+        slices = self._create_tf_slices(run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
 
         # Push each slice to transformer queue
         for slice_data in slices:
@@ -870,7 +872,7 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error(f"Error updating RunState slices: {e}",
                               extra=self._log_extra(error=str(e)))
 
-    def _create_tf_slices(self, run_id, tf_filename, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
+    def _create_tf_slices(self, run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
         """
         Create TF slice records in database, based on the TF file's range [tf_first, tf_last].
 
@@ -903,6 +905,8 @@ class FastProcessingAgent(BaseAgent):
                 'tf_last': slice_tf_last,
                 'tf_count': slice_tf_count,
                 'tf_filename': slice_filename,
+                'fastmon_file': tf_filename,  # TFSliceSerializer resolves this slug to the FastMonFile FK
+                'tf_file_id': tf_file_id,
                 'stf_filename': stf_filename,
                 'dest_path': dest_path,
                 'run_number': self.current_run_id,
@@ -962,6 +966,8 @@ class FastProcessingAgent(BaseAgent):
             'req_id': str(uuid.uuid4()),
             'filename': slice_data['stf_filename'],
             'tf_filename': slice_data['tf_filename'],
+            'tf_file_id': slice_data.get('tf_file_id'),
+            'tf_slice_id': slice_data.get('db_id'),
             'slice_id': slice_data['slice_id'],
             'start': slice_data['tf_first'],
             'end': slice_data['tf_last'],
@@ -1028,18 +1034,28 @@ class FastProcessingAgent(BaseAgent):
             # Extract slice information from the result
             # The result structure is: content -> result -> result (nested)
             inner_result = None
+            origin_message = None
+            metrics = None
+            payload_result = None
             if result and isinstance(result, dict):
                 inner_result = result.get('result') if isinstance(result.get('result'), dict) else None
+                origin_message = inner_result.get('origin_message') if inner_result and isinstance(inner_result, dict) else None
+                metrics = inner_result.get('metrics') if inner_result and isinstance(inner_result, dict) else None
+                payload_result = inner_result.get('payload_result') if inner_result and isinstance(inner_result, dict) else None
 
             # Get slice_id directly from the result data
             slice_id = None
             tf_filename = None
-            if inner_result and isinstance(inner_result, dict):
-                slice_id = inner_result.get('slice_id')
-                tf_filename = inner_result.get('tf_filename')
+            tf_file_id = None
+            tf_slice_id = None
+            if origin_message and isinstance(origin_message, dict):
+                slice_id = origin_message.get('slice_id')
+                tf_filename = origin_message.get('tf_filename')
+                tf_file_id = origin_message.get('tf_file_id')
+                tf_slice_id = origin_message.get('tf_slice_id')
 
-            if slice_id is None:
-                self.logger.debug("No slice_id in result, cannot update TFSlice record")
+            if tf_slice_id is None:
+                self.logger.debug("No tf_slice_id in result, cannot update TFSlice record")
                 return
 
             # Determine the final state
@@ -1057,12 +1073,8 @@ class FastProcessingAgent(BaseAgent):
                 'status': slice_status,
                 'completed_at': content.get('processed_at') or datetime.now().isoformat(),
                 'metadata': {
-                    'worker_hostname': content.get('hostname'),
-                    'panda_task_id': content.get('panda_task_id'),
-                    'panda_id': content.get('panda_id'),
-                    'harvester_id': content.get('harvester_id'),
-                    'processing_start_at': content.get('processing_start_at'),
-                    'result': result
+                    'metrics': metrics,
+                    'payload_result': payload_result
                 }
             }
 
@@ -1072,41 +1084,28 @@ class FastProcessingAgent(BaseAgent):
             # is ambiguous once a run has more than one TF file.
             run_id = message_data.get('run_id')
             try:
-                slices = self.call_monitor_api(
-                    'GET',
-                    f'/tf-slices/?tf_filename={tf_filename}&slice_id={slice_id}'
+                # Update the slice using database ID
+                api_result = self.call_monitor_api(
+                    'PATCH',
+                    f'/tf-slices/{tf_slice_id}/',
+                    update_data
                 )
-
-                if slices and isinstance(slices, list) and len(slices) > 0:
-                    match = next((s for s in slices
-                                  if s.get('tf_filename') == tf_filename and s.get('slice_id') == slice_id), slices[0])
-                    db_id = match.get('id')
-                    if db_id:
-                        # Update the slice using database ID
-                        api_result = self.call_monitor_api(
-                            'PATCH',
-                            f'/tf-slices/{db_id}/',
-                            update_data
-                        )
-                        if api_result:
-                            self.logger.info(
-                                f"TFSlice updated: slice_id={slice_id}, tf_filename={tf_filename} -> {slice_status}",
-                                extra=self._log_extra(slice_id=slice_id, tf_filename=tf_filename, status=slice_status)
-                            )
-                        else:
-                            self.logger.warning(
-                                f"Failed to update TFSlice: slice_id={slice_id}",
-                                extra=self._log_extra(slice_id=slice_id)
-                            )
-                else:
-                    self.logger.debug(
-                        f"TFSlice not found for slice_id: {slice_id}, run: {run_id}",
-                        extra=self._log_extra(slice_id=slice_id, run_id=run_id)
+                if api_result:
+                    self.logger.info(
+                        f"TFSlice updated: tf_slice_id={tf_slice_id}, tf_filename={tf_filename} -> {slice_status}",
+                        extra=self._log_extra(tf_slice_id=tf_slice_id, tf_filename=tf_filename, status=slice_status)
                     )
+                    self._finalize_fastmon_file_if_terminal(tf_file_id)
+                else:
+                    self.logger.warning(
+                        f"Failed to update TFSlice: tf_slice_id={tf_slice_id}",
+                        extra=self._log_extra(tf_slice_id=tf_slice_id)
+                    )
+
             except Exception as e:
                 self.logger.error(
-                    f"Error querying/updating TFSlice slice_id={slice_id}: {e}",
-                    extra=self._log_extra(slice_id=slice_id, error=str(e))
+                    f"Error updating TFSlice tf_slice_id={tf_slice_id}: {e}",
+                    extra=self._log_extra(tf_slice_id=tf_slice_id, error=str(e))
                 )
 
         except Exception as e:
@@ -1114,6 +1113,42 @@ class FastProcessingAgent(BaseAgent):
                 f"Error updating TFSlice from result: {e}",
                 extra=self._log_extra(error=str(e))
             )
+
+    def _finalize_fastmon_file_if_terminal(self, tf_file_id):
+        """Roll up a FastMonFile's status once every one of its TFSlices has
+        reached a terminal state: all completed -> DONE, all failed -> FAILED,
+        a mix of the two -> PROCESSED. No-op while any slice is still
+        queued/processing.
+        """
+        if not tf_file_id:
+            return
+
+        try:
+            slices = self.call_monitor_api('GET', f'/tf-slices/?fastmon_file_id={tf_file_id}')
+        except Exception as e:
+            self.logger.error(f"Error fetching TFSlices for fastmon_file_id={tf_file_id}: {e}",
+                              extra=self._log_extra(tf_file_id=tf_file_id, error=str(e)))
+            return
+
+        if not slices:
+            return
+
+        statuses = [s.get('status') for s in slices]
+        if not all(status in ('completed', 'failed') for status in statuses):
+            return
+
+        if all(status == 'completed' for status in statuses):
+            new_status = fast_processing_utils.FileStatus.DONE
+        elif all(status == 'failed' for status in statuses):
+            new_status = fast_processing_utils.FileStatus.FAILED
+        else:
+            new_status = fast_processing_utils.FileStatus.PROCESSED
+
+        fast_processing_utils.update_tf_file_status(tf_file_id, new_status, self, self.logger)
+        self.logger.info(
+            f"FastMonFile {tf_file_id} finalized: status={new_status} ({len(statuses)} slices)",
+            extra=self._log_extra(tf_file_id=tf_file_id, status=new_status)
+        )
 
 
 if __name__ == "__main__":
