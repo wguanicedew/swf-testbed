@@ -890,21 +890,18 @@ class FastProcessingAgent(BaseAgent):
             return slices
 
         num_slices = math.ceil(tf_count / num_tf_per_slice)
-        tf_base = tf_filename.rsplit('.', 1)[0]
 
         for i in range(num_slices):
             slice_tf_first = tf_first + i * num_tf_per_slice
             slice_tf_last = min(slice_tf_first + num_tf_per_slice - 1, tf_last)
             slice_tf_count = slice_tf_last - slice_tf_first + 1
 
-            slice_filename = f"{tf_base}_slice_{i:03d}.tf"
-
             slice_data = {
                 'slice_id': i,
                 'tf_first': slice_tf_first,
                 'tf_last': slice_tf_last,
                 'tf_count': slice_tf_count,
-                'tf_filename': slice_filename,
+                'tf_filename': tf_filename,
                 'fastmon_file': tf_filename,  # TFSliceSerializer resolves this slug to the FastMonFile FK
                 'tf_file_id': tf_file_id,
                 'stf_filename': stf_filename,
@@ -923,13 +920,13 @@ class FastProcessingAgent(BaseAgent):
             try:
                 workflow_params = self._get_workflow_params(run_id or self.current_run_id, self.current_execution_id)
                 no_duplicate_mode = workflow_params.get("fast_processing", {}).get('no_duplicate_mode', False)
-                existing = self.call_monitor_api('GET', f'/tf-slices/?tf_filename={slice_filename}&slice_id={i}')
+                existing = self.call_monitor_api('GET', f'/tf-slices/?fastmon_file_id={tf_file_id}&tf_filename={tf_filename}&slice_id={i}')
                 if existing:
                     match = next((r for r in existing
-                                  if r.get('tf_filename') == slice_filename and r.get('slice_id') == i), None)
+                                  if r.get('tf_filename') == tf_filename and r.get('slice_id') == i), None)
                     if match:
-                        self.logger.info(f"TFSlice {slice_filename} slice_id={i} already exists with ID {match.get('id')}, skipping",
-                                         extra=self._log_extra(tf_filename=slice_filename))
+                        self.logger.info(f"TFSlice {tf_filename} slice_id={i} already exists with ID {match.get('id')}, skipping",
+                                         extra=self._log_extra(tf_filename=tf_filename))
                         if not no_duplicate_mode:
                             slice_data['db_id'] = match.get('id')
                             slices.append(slice_data)
@@ -942,14 +939,14 @@ class FastProcessingAgent(BaseAgent):
                     # Add database ID to slice data for queue message
                     slice_data['db_id'] = result.get('id')
                     slices.append(slice_data)
-                    self.logger.debug(f"TFSlice created: {slice_filename}",
-                                      extra=self._log_extra(tf_filename=slice_filename))
+                    self.logger.debug(f"TFSlice created: {tf_filename} slice_id={i} with ID {result.get('id')}",
+                                      extra=self._log_extra(tf_filename=tf_filename))
                 else:
-                    self.logger.warning(f"Failed to create TFSlice: {slice_filename}",
-                                        extra=self._log_extra(tf_filename=slice_filename))
+                    self.logger.warning(f"Failed to create TFSlice: {tf_filename}",
+                                        extra=self._log_extra(tf_filename=tf_filename))
             except Exception as e:
-                self.logger.error(f"Error creating TFSlice {slice_filename}: {e}",
-                                  extra=self._log_extra(tf_filename=slice_filename, error=str(e)))
+                self.logger.error(f"Error creating TFSlice {tf_filename}: {e}",
+                                  extra=self._log_extra(tf_filename=tf_filename, error=str(e)))
 
         return slices
 
