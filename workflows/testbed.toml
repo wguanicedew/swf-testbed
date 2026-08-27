@@ -80,7 +80,7 @@ worker_rampup_time = 300        # Time to bring workers online (seconds, 5 min)
 worker_rampdown_time = 60       # Time for graceful worker shutdown (seconds)
 
 # FastMon agent parameters
-selection_fraction = 0.1        # Fraction of STF files to sample (10%)
+# selection_fraction = 0.1        # Fraction of STF files to sample (10%), it's stf_sampling_rate
 tf_files_per_stf = 7            # Number of TF files to generate per STF
 tf_size_fraction = 0.15         # Fraction of partition TF count per subsample (with gaussian noise)
 tf_count_per_stf = 1000         # Default total TF count per STF if not provided in stf_ready message
@@ -95,3 +95,10 @@ epic_version = "26.07.0"
 epic_image = "/cvmfs/singularity.opensciencegrid.org/eicweb/eic_xl:26.07.0-stable"
 
 processor_type = "zeromq"        # none or zeromq
+
+[ejfat]
+# admin_uri = "ejfat://token@host:port/lb/1?..."
+admin_uri: ejfats://****@ejfat-lb.es.net:18040/lb/68?sync=192.188.29.6:19042&data=192.188.29.42&data=[2001:400:a300::42]
+data_id = 1
+event_src_id = 1
+event_size_bytes = 1024

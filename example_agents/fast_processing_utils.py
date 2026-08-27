@@ -23,15 +23,15 @@ class FileStatus:
 def validate_config(config: dict) -> None:
     """Validate the configuration parameters for message-driven agent."""
     required_keys = [
-        "selection_fraction",
+        "stf_sampling_rate",
     ]
 
     for key in required_keys:
         if key not in config:
             raise ValueError(f"Missing required configuration key: {key}")
 
-    if not (0.0 <= config["selection_fraction"] <= 1.0):
-        raise ValueError("selection_fraction must be between 0.0 and 1.0")
+    if not (0.0 <= config["stf_sampling_rate"] <= 1.0):
+        raise ValueError("stf_sampling_rate must be between 0.0 and 1.0")
     
 
 def calculate_checksum(file_path: str, logger: logging.Logger) -> str:
@@ -74,10 +74,9 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
         List of TF metadata dictionaries
     """
     try:
-        selection_fraction = fast_processing.get("selection_fraction", config.get("selection_fraction", 1.0))
-        if not force_sample and random.random() >= selection_fraction:
-            # logger.debug(f"STF file {stf_file.get('filename')} skipped by selection_fraction={selection_fraction}")
-            logger.debug(f"STF file skipped by selection_fraction={selection_fraction}")
+        stf_sampling_rate = fast_processing.get("stf_sampling_rate", config.get("stf_sampling_rate", 1.0))
+        if not force_sample and random.random() >= stf_sampling_rate:
+            logger.debug(f"STF file skipped by stf_sampling_rate={stf_sampling_rate}")
             return []
 
         tf_size_fraction = fast_processing.get("tf_size_fraction", config.get("tf_size_fraction", 0.15))
@@ -208,3 +207,30 @@ def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.L
     except Exception as e:
         logger.error(f"Error updating TF file status for {tf_file_id}: {e}")
         return {}
+
+
+def check_run_terminated(run_id, agent, logger: logging.Logger) -> bool:
+    """
+    Check whether every FastMonFile sampled for a run has reached a terminal
+    status (done/processed/failed).
+
+    Args:
+        run_id: Run identifier to check
+        agent: BaseAgent instance for API access
+        logger: Logger instance
+
+    Returns:
+        True if at least one FastMonFile exists for the run and all of them
+        are terminal, False otherwise (including on lookup failure).
+    """
+    try:
+        fastmon_files = agent.call_monitor_api('GET', f'/fastmon-files/?run_id={run_id}')
+    except Exception as e:
+        logger.error(f"Error fetching FastMonFiles for run_id={run_id}: {e}")
+        return False
+
+    if not fastmon_files:
+        return False
+
+    terminal_statuses = (FileStatus.DONE, FileStatus.PROCESSED, FileStatus.FAILED)
+    return all(f.get('status') in terminal_statuses for f in fastmon_files)

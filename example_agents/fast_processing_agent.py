@@ -89,7 +89,7 @@ class FastProcessingAgent(BaseAgent):
 
         # Default configuration
         self.config = {
-            "selection_fraction": 0.1,  # 10% of files
+            "stf_sampling_rate": 0.1,  # 10% of files
             # TF simulation parameters
             "tf_files_per_stf": 7,  # Number of TF files to generate per STF
             "tf_size_fraction": 0.15,  # Fraction of partition TF count per subsample (with gaussian noise)
@@ -97,7 +97,12 @@ class FastProcessingAgent(BaseAgent):
             "tf_sequence_start": 1,  # Starting sequence number for TF files
             "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files
             "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
+            "streaming_mode": "activemq",  # 'activemq' (default) or 'ejfat'
             "tfs_per_subsample": 20,  # Number of TFs per subsample file
+            # EJFAT streaming parameters (used only when streaming_mode == 'ejfat'),
+            # populated from the [ejfat] section of the config file. Recognized keys:
+            # uri, data_id, event_src_id, use_cp, rate_gbps, mtu, event_size_bytes.
+            "ejfat": {},
             # Worker sizing (broadcast to PanDA transformer workers on run_imminent)
             "target_worker_count": 1,
             "memory_per_core": 4000,
@@ -121,6 +126,8 @@ class FastProcessingAgent(BaseAgent):
                 toml_data = tomllib.load(f)
             file_config = toml_data.get('fast_processing', {})
             self.config.update({k: v for k, v in file_config.items() if k in self.config})
+            ejfat_config = toml_data.get('ejfat', {})
+            self.config['ejfat'] = ejfat_config
         except FileNotFoundError:
             pass
 
@@ -208,6 +215,12 @@ class FastProcessingAgent(BaseAgent):
                 self.send_heartbeat()
             except Exception:
                 pass
+            if self.config.get('streaming_mode') == 'ejfat':
+                try:
+                    from fast_processing_ejfat import ejfat_free_load_balancer
+                    ejfat_free_load_balancer(self)
+                except Exception:
+                    pass
             try:
                 if self.mq_connected:
                     self.conn.disconnect()
@@ -431,6 +444,13 @@ class FastProcessingAgent(BaseAgent):
                     self.logger.info(f"Workflow parameters loaded (mid-run): {json.dumps(self.workflow_params, indent=2, sort_keys=True)}")
 
     def handle_run_imminent(self, message_data):
+        """Dispatch run_imminent handling based on the configured streaming_mode."""
+        if self.config.get('streaming_mode') == 'ejfat':
+            from fast_processing_ejfat import handle_run_imminent_ejfat
+            return handle_run_imminent_ejfat(self, message_data)
+        return self.handle_run_imminent_activemq(message_data)
+    
+    def handle_run_imminent_activemq(self, message_data):
         """Handle run_imminent message."""
         self.logger.info(
             f"Run imminent: execution_id={self.current_execution_id}, run_id={self.current_run_id}",
@@ -500,6 +520,13 @@ class FastProcessingAgent(BaseAgent):
         })
 
     def handle_stf_ready(self, message_data):
+        """Dispatch stf_ready handling based on the configured streaming_mode."""
+        if self.config.get('streaming_mode') == 'ejfat':
+            from fast_processing_ejfat import handle_stf_ready_ejfat
+            return handle_stf_ready_ejfat(self, message_data)
+        return self.handle_stf_ready_activemq(message_data)
+
+    def handle_stf_ready_activemq(self, message_data):
         """
         Handle stf_ready message and sample STFs into TFs
         Registers the TFs in the swf-monitor database and notifies clients.
@@ -669,6 +696,13 @@ class FastProcessingAgent(BaseAgent):
         })
 
     def handle_end_run(self, message_data):
+        """Dispatch end_run handling based on the configured streaming_mode."""
+        if self.config.get('streaming_mode') == 'ejfat':
+            from fast_processing_ejfat import handle_end_run_ejfat
+            return handle_end_run_ejfat(self, message_data)
+        return self.handle_end_run_activemq(message_data)
+
+    def handle_end_run_activemq(self, message_data):
         """Handle end_run: Update RunState to completed."""
         total_stf = message_data.get('total_stf_files', 0)
 
@@ -1146,6 +1180,14 @@ class FastProcessingAgent(BaseAgent):
             f"FastMonFile {tf_file_id} finalized: status={new_status} ({len(statuses)} slices)",
             extra=self._log_extra(tf_file_id=tf_file_id, status=new_status)
         )
+
+        self._finalize_run_if_terminal_ext(tf_file_id)
+        
+    def _finalize_run_if_terminal_ext(self, tf_file_id):
+        """Finalize EJFAT based on the configured streaming_mode."""
+        if self.config.get('streaming_mode') == 'ejfat':
+            from fast_processing_ejfat import _finalize_run_if_terminal_ejfat
+            return _finalize_run_if_terminal_ejfat(self, tf_file_id)
 
 
 if __name__ == "__main__":
