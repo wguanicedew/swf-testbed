@@ -625,28 +625,9 @@ class FastProcessingAgent(BaseAgent):
 
         num_tf_per_slice = fast_processing.get('num_tf_per_slice', self.config.get('tfs_per_subsample', 2))
         
-        epic_image = fast_processing.get('epic_image', None)
-        if isinstance(epic_image, str) and epic_image.lower() == 'none':
-            epic_image = None
-        if epic_image:
-            epic_version = fast_processing.get('epic_version', None)
-            if isinstance(epic_version, str) and epic_version.lower() == 'none':
-                epic_version = None
-            self.logger.info(f"Using epic_image from workflow params: {epic_image}, epic_version: {epic_version}",
-                             extra=self._log_extra(epic_image=epic_image, epic_version=epic_version))
-        else:
-            epic_image = self.config.get('epic_image', None)
-            if isinstance(epic_image, str) and epic_image.lower() == 'none':
-                epic_image = None
-            epic_version = self.config.get('epic_version', None)
-            if isinstance(epic_version, str) and epic_version.lower() == 'none':
-                epic_version = None
-            self.logger.info(f"No epic_image specified in workflow params. Using default epic_image: {epic_image}, epic_version: {epic_version}",
-                             extra=self._log_extra(epic_image=epic_image, epic_version=epic_version))
-
-        processor_type = fast_processing.get('processor_type', self.config.get('processor_type', None))
-        if isinstance(processor_type, str) and processor_type.lower() == 'none':
-            processor_type = None
+        epic_image, epic_version, processor_type = fast_processing_utils.resolve_epic_params(
+            fast_processing, self.config, self.logger
+        )
         dest_path = fast_processing.get('dest_path', self.config.get('dest_path', None)) or self.default_dest_path
 
         run_id = message_data.get('run_id')

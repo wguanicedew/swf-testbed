@@ -18,7 +18,10 @@ typically samples many.
 Reference for the e2sar_py control/data-plane API shape: ../E2SAR/python/client.py
 """
 
+import base64
+import json
 import os
+import uuid
 from datetime import datetime
 
 import fast_processing_utils
@@ -231,16 +234,58 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
 
     num_tf_per_slice = fast_processing.get('num_tf_per_slice', agent.config.get('tfs_per_subsample', 2))
 
+    epic_image, epic_version, processor_type = fast_processing_utils.resolve_epic_params(
+        fast_processing, agent.config, agent.logger
+    )
+    file_type = message_data.get('file_type')
+    dest_path = fast_processing.get('dest_path', agent.config.get('dest_path', None)) or agent.default_dest_path
+
     # Create TF slices from this TF sample; one slice becomes one EJFAT event.
     slices = agent._create_tf_slices(
-        run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None
+        run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path
     )
 
     event_size_bytes = agent.config.get('ejfat', {}).get('event_size_bytes', 1024)
 
     events_sent = 0
     for slice_data in slices:
-        payload = os.urandom(event_size_bytes)
+        # Same content shape as the ActiveMQ path's transformer-queue message
+        # (see FastProcessingAgent._send_slice_to_queue), plus a 'payload' field
+        # carrying the simulated event bytes -- EJFAT has no separate queue, so
+        # the slice metadata has to travel alongside the event itself.
+        content = {
+            'run_id': run_id or agent.current_run_id,
+            'execution_id': agent.current_execution_id,
+            'req_id': str(uuid.uuid4()),
+            'filename': slice_data['stf_filename'],
+            'tf_filename': slice_data['tf_filename'],
+            'tf_file_id': slice_data.get('tf_file_id'),
+            'tf_slice_id': slice_data.get('db_id'),
+            'slice_id': slice_data['slice_id'],
+            'start': slice_data['tf_first'],
+            'end': slice_data['tf_last'],
+            'tf_count': slice_data['tf_count'],
+            'dest_path': slice_data['dest_path'],
+            'epic_version': epic_version,
+            'epic_image': epic_image,
+            'processor_type': processor_type,
+            'state': 'queued',
+            'substate': 'new'
+        }
+        if file_type is not None:
+            content['file_type'] = file_type
+
+        event = os.urandom(event_size_bytes)
+        content['payload'] = base64.b64encode(event).decode('ascii')
+
+        message = {
+            'msg_type': 'slice',
+            'run_id': run_id or agent.current_run_id,
+            'created_at': datetime.utcnow().isoformat(),
+            'content': content
+        }
+
+        payload = json.dumps(message).encode('utf-8')
         if ejfat_send_event(agent, payload):
             events_sent += 1
         else:

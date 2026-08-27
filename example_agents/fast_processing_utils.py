@@ -209,6 +209,34 @@ def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.L
         return {}
 
 
+def resolve_epic_params(fast_processing: dict, config: dict, logger: logging.Logger):
+    """
+    Resolve epic_image/epic_version/processor_type for a TF sub sample: prefer
+    workflow params (fast_processing), falling back to agent config. The string
+    'none' is treated the same as an absent value.
+
+    Returns:
+        (epic_image, epic_version, processor_type) tuple
+    """
+    def _none_or(value):
+        return None if isinstance(value, str) and value.lower() == 'none' else value
+
+    epic_image = _none_or(fast_processing.get('epic_image', None))
+    if epic_image:
+        epic_version = _none_or(fast_processing.get('epic_version', None))
+        logger.info(f"Using epic_image from workflow params: {epic_image}, epic_version: {epic_version}",
+                    extra={'epic_image': epic_image, 'epic_version': epic_version})
+    else:
+        epic_image = _none_or(config.get('epic_image', None))
+        epic_version = _none_or(config.get('epic_version', None))
+        logger.info(f"No epic_image specified in workflow params. Using default epic_image: {epic_image}, epic_version: {epic_version}",
+                    extra={'epic_image': epic_image, 'epic_version': epic_version})
+
+    processor_type = _none_or(fast_processing.get('processor_type', config.get('processor_type', None)))
+
+    return epic_image, epic_version, processor_type
+
+
 def check_run_terminated(run_id, agent, logger: logging.Logger) -> bool:
     """
     Check whether every FastMonFile sampled for a run has reached a terminal
