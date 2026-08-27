@@ -21,6 +21,7 @@ Reference for the e2sar_py control/data-plane API shape: ../E2SAR/python/client.
 import base64
 import json
 import os
+import pickle
 import uuid
 from datetime import datetime
 
@@ -216,6 +217,27 @@ def handle_run_imminent_ejfat(agent, message_data):
         )
 
 
+def _read_eic_root_events(root_filename, entry_start, entry_count):
+    """
+    Read the [entry_start, entry_start + entry_count) event range from the
+    'events' TTree of a real (non-fake/mock) EIC ROOT STF file, for use as an
+    EJFAT event payload.
+    """
+    try:
+        import uproot
+    except ImportError as e:
+        raise RuntimeError(
+            "streaming events from an EIC ROOT file over EJFAT requires the uproot "
+            "package (https://github.com/scikit-hep/uproot5) to be installed and importable."
+        ) from e
+
+    with uproot.open(root_filename) as root_file:
+        tree = root_file['events']
+        arrays = tree.arrays(entry_start=entry_start, entry_stop=entry_start + entry_count)
+
+    return pickle.dumps(arrays)
+
+
 def _handle_slice_ejfat(agent, message_data, fast_processing=None):
     """Create TF slices (same DB bookkeeping as the ActiveMQ path) and stream each one to EJFAT as an event."""
     fast_processing = fast_processing or {}
@@ -275,7 +297,18 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
         if file_type is not None:
             content['file_type'] = file_type
 
-        event = os.urandom(event_size_bytes)
+        try:
+            if file_type not in ('fake', 'mock'):
+                event = _read_eic_root_events(slice_data['stf_filename'], slice_data['tf_first'], slice_data['tf_count'])
+            else:
+                event = os.urandom(event_size_bytes)
+        except Exception as e:
+            agent.logger.error(
+                f"Failed to read events for slice {slice_data.get('slice_id')} of {tf_filename}: {e}",
+                extra=agent._log_extra(tf_filename=tf_filename, error=str(e))
+            )
+            continue
+
         content['payload'] = base64.b64encode(event).decode('ascii')
 
         message = {
