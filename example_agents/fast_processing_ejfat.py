@@ -185,28 +185,15 @@ def ejfat_receive_event(agent, wait_ms=200):
 def handle_run_imminent_ejfat(agent, message_data):
     """
     Handle run_imminent when streaming_mode == 'ejfat': reserve a load balancer
-    for the upcoming run. EJFAT workers (reassemblers) register directly with
-    the load balancer's control plane rather than listening on
-    WORKER_BROADCAST_TOPIC, so this skips the ActiveMQ worker broadcast
-    handle_run_imminent_activemq sends.
+    for the upcoming run, then delegate to handle_run_imminent_activemq to
+    broadcast run_imminent_worker on WORKER_BROADCAST_TOPIC so PanDA workers
+    are still spun up the same way as the ActiveMQ path -- EJFAT only changes
+    how TF slice events reach those workers, not how they're created.
     """
     agent.logger.info(
         f"Run imminent (ejfat): execution_id={agent.current_execution_id}, run_id={agent.current_run_id}",
         extra=agent._log_extra()
     )
-
-    workflow_params = agent._get_workflow_params(
-        message_data.get('run_id') or agent.current_run_id,
-        message_data.get('execution_id') or agent.current_execution_id
-    )
-    fast_processing = workflow_params.get('fast_processing', {})
-
-    agent._log_system_event('run_imminent', {
-        'execution_id': agent.current_execution_id,
-        'streaming_mode': 'ejfat',
-        'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
-        'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
-    })
 
     try:
         ejfat_reserve_load_balancer(agent, message_data)
@@ -215,6 +202,8 @@ def handle_run_imminent_ejfat(agent, message_data):
             f"Failed to reserve EJFAT load balancer on run_imminent: {e}",
             extra=agent._log_extra(error=str(e))
         )
+
+    agent.handle_run_imminent_activemq(message_data)
 
 
 def _read_eic_root_events(root_filename, entry_start, entry_count):
@@ -428,41 +417,16 @@ def handle_end_run_ejfat(agent, message_data):
     Frees the load balancer immediately if every FastMonFile sampled during
     the run has already reached a terminal state, otherwise
     _finalize_run_if_terminal_ejfat frees it once the last outstanding one
-    finalizes. Skips the ActiveMQ worker broadcast handle_end_run_activemq
-    sends, since EJFAT workers aren't listening on it.
+    finalizes. Then delegates to handle_end_run_activemq for the bookkeeping
+    and control-message broadcast (WORKER_BROADCAST_TOPIC) shared with the
+    ActiveMQ path, run while agent.current_run_id/current_execution_id are
+    still set so that broadcast carries the right run/execution ids.
     """
-    total_stf = message_data.get('total_stf_files', 0)
-
-    agent.logger.info(
-        f"Run ended (ejfat): run_id={message_data.get('run_id') or agent.current_run_id}, "
-        f"tf_files_processed={agent.stats['tf_files_processed']}, "
-        f"slices_created={agent.stats['slices_created']}",
-        extra=agent._log_extra(total_stf=total_stf,
-                                tf_files_processed=agent.stats['tf_files_processed'],
-                                slices_created=agent.stats['slices_created'])
-    )
-
-    agent._update_run_state(run_id=message_data.get('run_id'), phase='completed', state='ended', substate=None)
-
-    agent._log_system_event('end_run', {
-        'execution_id': agent.current_execution_id,
-        'streaming_mode': 'ejfat',
-        'total_tf_files_processed': agent.stats['tf_files_processed'],
-        'total_slices_created': agent.stats['slices_created'],
-        'total_slices_sent': agent.stats['slices_sent']
-    })
-
     run_id = message_data.get('run_id') or agent.current_run_id
     if fast_processing_utils.check_run_finalized(run_id, agent, agent.logger):
         ejfat_free_load_balancer(agent)
 
-    # Clear current run state
-    agent.current_run_id = None
-    agent.current_execution_id = None
-    agent.workflow_params = {}
-
-    # Agent is now idle, waiting for next run
-    agent.set_ready()
+    agent.handle_end_run_activemq(message_data)
 
 
 def _finalize_run_if_terminal_ejfat(agent, tf_file_id):

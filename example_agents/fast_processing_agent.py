@@ -22,7 +22,10 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 import stomp
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 from swf_common_lib.base_agent import BaseAgent
 import fast_processing_utils
 
@@ -484,7 +487,8 @@ class FastProcessingAgent(BaseAgent):
                 'target_worker_count': self.config.get('target_worker_count', 1),
                 'slice_processing_time': self.config.get('slice_processing_time', 1),
                 'worker_rampup_time': self.config.get('worker_rampup_time', 1),
-                'worker_rampdown_time': self.config.get('worker_rampdown_time', 1)
+                'worker_rampdown_time': self.config.get('worker_rampdown_time', 1),
+                'streaming_mode': self.config.get('streaming_mode', 'activemq'),
             })
 
             run_id = message_data.get('run_id') or self.current_run_id
