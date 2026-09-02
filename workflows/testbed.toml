@@ -98,7 +98,7 @@ processor_type = "zeromq"        # none or zeromq
 
 [ejfat]
 # admin_uri = "ejfat://token@host:port/lb/1?..."
-admin_uri: ejfats://****@ejfat-lb.es.net:18040/lb/68?sync=192.188.29.6:19042&data=192.188.29.42&data=[2001:400:a300::42]
+admin_uri = "ejfats://****@ejfat-lb.es.net:18040/lb/68?sync=192.188.29.6:19042&data=192.188.29.42&data=[2001:400:a300::42]"
 data_id = 1
 event_src_id = 1
 event_size_bytes = 1024
