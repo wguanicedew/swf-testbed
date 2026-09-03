@@ -10,7 +10,7 @@ via e2sar_py's DataPlane Segmenter. As with the ActiveMQ path, each TFSlice is
 marked terminal asynchronously when its slice_result message arrives (see
 FastProcessingAgent.handle_slice_result / _finalize_fastmon_file_if_terminal),
 not by this module. The load balancer is freed once
-fast_processing_utils.check_run_finalized reports every FastMonFile sampled
+fast_processing_utils.check_run_terminated reports every FastMonFile sampled
 during the run is terminal (see _finalize_run_if_terminal_ejfat /
 handle_end_run_ejfat) -- not on any single TF file's completion, since a run
 typically samples many.
@@ -423,7 +423,7 @@ def handle_end_run_ejfat(agent, message_data):
     still set so that broadcast carries the right run/execution ids.
     """
     run_id = message_data.get('run_id') or agent.current_run_id
-    if fast_processing_utils.check_run_finalized(run_id, agent, agent.logger):
+    if fast_processing_utils.check_run_terminated(run_id, agent, agent.logger):
         ejfat_free_load_balancer(agent)
 
     agent.handle_end_run_activemq(message_data)
@@ -439,7 +439,7 @@ def _finalize_run_if_terminal_ejfat(agent, tf_file_id):
     doesn't necessarily mean the run is done.
     """
     run_id = agent.current_run_id
-    if fast_processing_utils.check_run_finalized(run_id, agent, agent.logger):
+    if fast_processing_utils.check_run_terminated(run_id, agent, agent.logger):
         agent.logger.info(
             f"All FastMonFiles for run={run_id} are terminal, freeing EJFAT load balancer",
             extra=agent._log_extra(tf_file_id=tf_file_id)

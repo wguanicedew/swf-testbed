@@ -525,6 +525,9 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_stf_ready(self, message_data):
         """Dispatch stf_ready handling based on the configured streaming_mode."""
+        self.logger.info(f"Received stf_ready message: {message_data.get('filename') or 'unknown filename'}",
+                         extra=self._log_extra())
+        
         if self.config.get('streaming_mode') == 'ejfat':
             from fast_processing_ejfat import handle_stf_ready_ejfat
             return handle_stf_ready_ejfat(self, message_data)
