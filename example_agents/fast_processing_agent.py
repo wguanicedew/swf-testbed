@@ -147,7 +147,7 @@ class FastProcessingAgent(BaseAgent):
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGQUIT, signal_handler)
 
-        logging.info(f"Starting {self.agent_name}...")
+        logging.info(f"Starting {self.agent_name} with streaming mode: {self.config['streaming_mode']}...")
 
         # Connect to ActiveMQ
         if not getattr(self, 'mq_connected', False):
