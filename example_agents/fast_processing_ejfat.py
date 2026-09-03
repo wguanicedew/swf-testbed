@@ -34,6 +34,7 @@ def ejfat_reserve_load_balancer(agent, message_data):
     data-plane Segmenter (registering as a sender on the LB) used to stream
     TF slice events to it for the rest of the run.
     """
+    agent.logger.info("Reserving EJFAT load balancer", extra=agent._log_extra())
     try:
         import e2sar_py
     except ImportError as e:
@@ -105,6 +106,7 @@ def ejfat_free_load_balancer(agent):
     Stop the data-plane segmenter and free the reserved EJFAT load balancer,
     if one was reserved. Safe to call more than once.
     """
+    agent.logger.info("Freeing EJFAT load balancer (if any)", extra=agent._log_extra())
     segmenter = getattr(agent, '_ejfat_segmenter', None)
     if segmenter is not None:
         segmenter.stopThreads()
@@ -137,6 +139,7 @@ def ejfat_send_event(agent, payload):
     Send one event's payload through the EJFAT segmenter opened by
     ejfat_reserve_load_balancer. Returns True on success, False on failure (logged).
     """
+    agent.logger.debug(f"Sending EJFAT event of {len(payload)} bytes", extra=agent._log_extra())
     segmenter = getattr(agent, '_ejfat_segmenter', None)
     if segmenter is None:
         raise RuntimeError(
@@ -165,6 +168,7 @@ def ejfat_receive_event(agent, wait_ms=200):
     Returns (event_bytes, event_num, data_id), or None if nothing was received
     within wait_ms or on error (logged).
     """
+    agent.logger.debug(f"Receiving EJFAT event (wait_ms={wait_ms})", extra=agent._log_extra())
     reassembler = getattr(agent, '_ejfat_reassembler', None)
     if reassembler is None:
         raise RuntimeError(
@@ -288,9 +292,12 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
 
         try:
             if file_type not in ('fake', 'mock'):
+                agent.logger.debug(f"Reading EIC ROOT events from {slice_data['stf_filename']}, start={slice_data['tf_first']}, count={slice_data['tf_count']}", extra=agent._log_extra())
                 event = _read_eic_root_events(slice_data['stf_filename'], slice_data['tf_first'], slice_data['tf_count'])
+                agent.logger.debug(f"Finished reading EIC ROOT events (len={len(event)} bytes) from {slice_data['stf_filename']}", extra=agent._log_extra())
             else:
                 event = os.urandom(event_size_bytes)
+                agent.logger.debug(f"Generated mock event of {len(event)} bytes", extra=agent._log_extra())
         except Exception as e:
             agent.logger.error(
                 f"Failed to read events for slice {slice_data.get('slice_id')} of {tf_filename}: {e}",
@@ -308,12 +315,14 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
         }
 
         payload = json.dumps(message).encode('utf-8')
+        agent.logger.debug(f"Sending slice {slice_data.get('slice_id')} of {tf_filename} via EJFAT (payload size={len(payload)} bytes)", extra=agent._log_extra(tf_filename=tf_filename, slice_id=slice_data.get('slice_id')))
         if ejfat_send_event(agent, payload):
             events_sent += 1
+            agent.logger.debug(f"Successfully sent slice {slice_data.get('slice_id')} of {tf_filename} via EJFAT", extra=agent._log_extra(tf_filename=tf_filename, slice_id=slice_data.get('slice_id')))
         else:
             agent.logger.error(
                 f"Failed to send slice {slice_data.get('slice_id')} of {tf_filename} via EJFAT",
-                extra=agent._log_extra(tf_filename=tf_filename)
+                extra=agent._log_extra(tf_filename=tf_filename, slice_id=slice_data.get('slice_id'))
             )
 
     agent._update_run_state_slices(run_id=run_id, new_slices_count=len(slices))
