@@ -36,7 +36,7 @@ class DataAgent(BaseAgent):
 
         try:
             if msg_type == 'stf_gen':
-                self.handle_stf_gen(message_data)
+                self.run_in_background(self.handle_stf_gen, message_data, label='stf_gen')
             elif msg_type == 'run_imminent':
                 self.handle_run_imminent(message_data)
             elif msg_type == 'start_run':
@@ -51,7 +51,7 @@ class DataAgent(BaseAgent):
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             raise RuntimeError(f"Critical message processing failure: {e}") from e
-    
+
     # Data agent specific monitor integration methods
     def create_run_record(self, run_id, run_conditions):
         """Create a run record in the monitor."""
