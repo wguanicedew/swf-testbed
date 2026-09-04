@@ -65,7 +65,7 @@ def ejfat_reserve_load_balancer(agent, message_data):
         ip_family=ejfat_config.get('ip_family', 0),
     )
     if result.has_error():
-        raise RuntimeError(f"Failed to reserve EJFAT load balancer: {result.error().message()}")
+        raise RuntimeError(f"Failed to reserve EJFAT load balancer: {result.error().message}")
 
     agent._ejfat_lbm = lbm
     instance_uri = lbm.get_uri()
@@ -89,12 +89,12 @@ def ejfat_reserve_load_balancer(agent, message_data):
         sender_lbm = e2sar_py.ControlPlane.LBManager(instance_uri, not ejfat_config.get('insecure', False))
         result = sender_lbm.add_sender_self(False)
         if result.has_error():
-            raise RuntimeError(f"Failed to add sender to EJFAT load balancer: {result.error().message()}")
+            raise RuntimeError(f"Failed to add sender to EJFAT load balancer: {result.error().message}")
 
     segmenter = e2sar_py.DataPlane.Segmenter(instance_uri, data_id, event_src_id, sflags)
     result = segmenter.OpenAndStart()
     if result.has_error():
-        raise RuntimeError(f"Failed to start EJFAT segmenter: {result.error().message()}")
+        raise RuntimeError(f"Failed to start EJFAT segmenter: {result.error().message}")
 
     agent._ejfat_segmenter = segmenter
     agent._ejfat_sender_lbm = sender_lbm
@@ -130,7 +130,7 @@ def ejfat_free_load_balancer(agent):
     try:
         result = lbm.free_lb()
         if result.has_error():
-            agent.logger.error(f"Failed to free EJFAT load balancer: {result.error().message()}")
+            agent.logger.error(f"Failed to free EJFAT load balancer: {result.error().message}")
         else:
             agent.logger.info("EJFAT load balancer freed", extra=agent._log_extra())
     except Exception as e:
@@ -153,7 +153,7 @@ def ejfat_send_event(agent, payload):
 
     result = segmenter.sendEvent(payload, len(payload))
     if result.has_error():
-        agent.logger.error(f"Failed to send EJFAT event: {result.error().message()}",
+        agent.logger.error(f"Failed to send EJFAT event: {result.error().message}",
                             extra=agent._log_extra())
         return False
     return True
