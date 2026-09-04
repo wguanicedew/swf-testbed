@@ -43,7 +43,7 @@ def ejfat_reserve_load_balancer(agent, message_data):
             "bindings, https://github.com/JeffersonLab/E2SAR) to be installed and importable."
         ) from e
 
-    ejfat_config = agent.config.get('ejfat', {})
+    ejfat_config = agent.config.setdefault('ejfat', {})
     admin_uri_str = ejfat_config.get('admin_uri') or os.environ.get('EJFAT_URI')
     if not admin_uri_str:
         raise RuntimeError(
@@ -69,8 +69,10 @@ def ejfat_reserve_load_balancer(agent, message_data):
 
     agent._ejfat_lbm = lbm
     instance_uri = lbm.get_uri()
+    ejfat_config['instance_uri'] = instance_uri.to_string(e2sar_py.EjfatURI.TokenType.instance)
+    ejfat_config['lifetime'] = duration
     agent.logger.info(
-        f"EJFAT load balancer '{lb_name}' reserved for {duration}s",
+        f"EJFAT load balancer '{lb_name}' reserved for {duration}s; instance URI recorded in config",
         extra=agent._log_extra()
     )
 
@@ -119,6 +121,8 @@ def ejfat_free_load_balancer(agent):
         except Exception:
             pass
         agent._ejfat_sender_lbm = None
+
+    agent.config.get('ejfat', {}).pop('instance_uri', None)
 
     lbm = getattr(agent, '_ejfat_lbm', None)
     if lbm is None:

@@ -490,6 +490,13 @@ class FastProcessingAgent(BaseAgent):
                 'worker_rampdown_time': self.config.get('worker_rampdown_time', 1),
                 'streaming_mode': self.config.get('streaming_mode', 'activemq'),
             })
+            if content['streaming_mode'] == 'ejfat':
+                ejfat_instance_uri = self.config.get('ejfat', {}).get('instance_uri')
+                if ejfat_instance_uri:
+                    content['ejfat_instance_uri'] = ejfat_instance_uri
+                ejfat_lifetime = self.config.get('ejfat', {}).get('lifetime')
+                if ejfat_lifetime:
+                    content['ejfat_lifetime'] = ejfat_lifetime
 
             run_id = message_data.get('run_id') or self.current_run_id
             message = {

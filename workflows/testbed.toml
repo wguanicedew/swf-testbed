@@ -102,3 +102,4 @@ admin_uri = "ejfats://****@ejfat-lb.es.net:18040/lb/68?sync=192.188.29.6:19042&d
 data_id = 1
 event_src_id = 1
 event_size_bytes = 1024
+lb_duration_seconds = 3600
