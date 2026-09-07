@@ -57,6 +57,8 @@ def ejfat_reserve_load_balancer(agent, message_data):
     run_id = message_data.get('run_id') or agent.current_run_id
     lb_name = ejfat_config.get('lb_name') or f"{agent.agent_name}-{run_id}"
     duration = ejfat_config.get('lb_duration_seconds', 3600)
+    if duration:
+        duration = int(duration)
 
     result = lbm.reserve_lb_in_seconds(
         lb_id=lb_name,
