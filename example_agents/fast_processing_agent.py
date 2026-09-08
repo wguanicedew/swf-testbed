@@ -407,7 +407,9 @@ class FastProcessingAgent(BaseAgent):
 
         try:
             if msg_type == 'run_imminent':
-                self.handle_run_imminent(message_data)
+                # Offloaded: reserves the EJFAT load balancer (ejfat mode) or
+                # fetches workflow params via a blocking REST call (activemq mode).
+                self.run_in_background(self.handle_run_imminent, message_data, label='run_imminent')
             elif msg_type == 'start_run':
                 self.handle_start_run(message_data)
             elif msg_type == 'stf_ready':
