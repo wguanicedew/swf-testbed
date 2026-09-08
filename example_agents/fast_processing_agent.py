@@ -44,6 +44,9 @@ class FastProcessingAgent(BaseAgent):
     # Queue for worker broadcasts
     WORKER_BROADCAST_TOPIC = '/topic/panda.workers'
 
+    # transfer broadcast topic for workers to receive run_imminent and end_run messages
+    TRANSFER_BROADCAST_TOPIC = "/topic/panda.transformer"
+
     # Queue for transformer results
     TRANSFORMER_RESULTS_QUEUE = '/queue/panda.results.fastprocessing'
 
@@ -56,13 +59,25 @@ class FastProcessingAgent(BaseAgent):
         )
         self.default_dest_path = dest_path
         # Additional subscriptions beyond the primary queue (subscribed in run())
-        self._extra_subscription_queues = [self.TRANSFORMER_RESULTS_QUEUE]
+        self._extra_subscription_queues = [self.TRANSFORMER_RESULTS_QUEUE, self.TRANSFER_BROADCAST_TOPIC]
 
         # Workflow parameters (populated on run_imminent)
         self.workflow_params = {}
 
         # Cache: run_id -> {'params': dict, 'expires_at': datetime}
         self.workflow_params_cache = {}
+
+        # Cache of transformers announced via transformer_ready broadcasts:
+        # run_id -> {id -> {'timestamp': float, 'lifetime': float}} (time.time() units,
+        # matching the producer in swf_transform.prompt.transformer). An entry is
+        # stale once time.time() > timestamp + lifetime.
+        self.transformers_cache = {}
+
+        # EJFAT mode only: stf_ready messages received before any transformer
+        # has announced itself ready for that run_id. run_id -> [message_data, ...].
+        # Flushed (via handle_transformer_ready) once transformers_cache has an
+        # entry for that run_id.
+        self.pending_stf_ready = {}
 
         # Processing state
         self.tf_files_processed = 0
@@ -381,7 +396,9 @@ class FastProcessingAgent(BaseAgent):
 
     def on_message(self, frame):
         """Handle incoming workflow messages."""
-        message_data, msg_type = self.log_received_message(frame)
+        message_data, msg_type = self.log_received_message(
+            frame, known_types=self.WORKFLOW_MESSAGE_TYPES | {'transformer_ready'}
+        )
         if message_data is None:
             return
 
@@ -406,6 +423,8 @@ class FastProcessingAgent(BaseAgent):
             elif msg_type == 'slice_result':
                 # Offloaded: updates the TFSlice record via a blocking REST call.
                 self.run_in_background(self.handle_slice_result, message_data, label='slice_result')
+            elif msg_type == 'transformer_ready':
+                self.handle_transformer_ready(message_data)
             else:
                 self.logger.debug(f"Ignoring message type: {msg_type}")
         except Exception as e:
@@ -534,8 +553,19 @@ class FastProcessingAgent(BaseAgent):
         """Dispatch stf_ready handling based on the configured streaming_mode."""
         self.logger.info(f"Received stf_ready message: {message_data.get('filename') or 'unknown filename'}",
                          extra=self._log_extra())
-        
+
         if self.config.get('streaming_mode') == 'ejfat':
+            run_id = message_data.get('run_id') or self.current_run_id
+            with self._state_lock:
+                self._expire_transformers()
+                if not self.transformers_cache.get(run_id):
+                    self.pending_stf_ready.setdefault(run_id, []).append(message_data)
+                    self.logger.info(
+                        f"No ready transformers for run_id={run_id}; caching stf_ready message until one is ready",
+                        extra=self._log_extra(run_id=run_id)
+                    )
+                    return None
+
             from fast_processing_ejfat import handle_stf_ready_ejfat
             return handle_stf_ready_ejfat(self, message_data)
         return self.handle_stf_ready_activemq(message_data)
@@ -798,6 +828,59 @@ class FastProcessingAgent(BaseAgent):
 
         self.logger.info(f"Handled slice_result: run={message_data.get('run_id')}, msg={message_data.get('msg_type')}",
                          extra=self._log_extra(run_id=message_data.get('run_id')))
+
+    def handle_transformer_ready(self, message_data):
+        """Record a transformer_ready broadcast in transformers_cache.
+
+        Message content (per swf_transform.prompt.transformer): id, run_id,
+        timestamp, lifetime (all time.time()-based seconds).
+        """
+        content = message_data.get('content', {})
+        transformer_id = content.get('id')
+        run_id = content.get('run_id') or message_data.get('run_id')
+        timestamp = content.get('timestamp')
+        lifetime = content.get('lifetime')
+
+        if not transformer_id or not run_id or timestamp is None or lifetime is None:
+            self.logger.warning(f"Ignoring malformed transformer_ready message: {message_data}",
+                                extra=self._log_extra())
+            return
+
+        with self._state_lock:
+            self.transformers_cache.setdefault(run_id, {})[transformer_id] = {
+                'timestamp': timestamp,
+                'lifetime': lifetime
+            }
+            self._expire_transformers()
+            pending = self.pending_stf_ready.pop(run_id, []) if self.transformers_cache.get(run_id) else []
+
+        self.logger.debug(f"Transformer ready: id={transformer_id}, run_id={run_id}, lifetime={lifetime}",
+                          extra=self._log_extra(run_id=run_id))
+
+        if pending:
+            from fast_processing_ejfat import handle_stf_ready_ejfat
+            self.logger.info(
+                f"Transformer available for run_id={run_id}; flushing {len(pending)} cached stf_ready message(s)",
+                extra=self._log_extra(run_id=run_id)
+            )
+            for pending_message in pending:
+                self.run_in_background(handle_stf_ready_ejfat, self, pending_message, label='stf_ready_pending')
+
+    def _expire_transformers(self):
+        """Remove transformer entries past timestamp + lifetime. Caller holds _state_lock."""
+        now = time.time()
+        expired_runs = []
+        for run_id, transformers in self.transformers_cache.items():
+            expired_ids = [
+                tid for tid, entry in transformers.items()
+                if now > entry['timestamp'] + entry['lifetime']
+            ]
+            for tid in expired_ids:
+                del transformers[tid]
+            if not transformers:
+                expired_runs.append(run_id)
+        for run_id in expired_runs:
+            del self.transformers_cache[run_id]
 
     # -------------------------------------------------------------------------
     # Helper methods
