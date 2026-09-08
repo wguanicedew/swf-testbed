@@ -556,6 +556,10 @@ class FastProcessingAgent(BaseAgent):
 
         if self.config.get('streaming_mode') == 'ejfat':
             run_id = message_data.get('run_id') or self.current_run_id
+            # Normalized to str: transformer_ready broadcasts (from swf-transform,
+            # a separate repo) may carry run_id as an int while this agent's own
+            # messages use str -- without normalizing, the two never key-match.
+            run_id = str(run_id) if run_id is not None else run_id
             with self._state_lock:
                 self._expire_transformers()
                 if not self.transformers_cache.get(run_id):
@@ -845,6 +849,11 @@ class FastProcessingAgent(BaseAgent):
             self.logger.warning(f"Ignoring malformed transformer_ready message: {message_data}",
                                 extra=self._log_extra())
             return
+
+        # Normalized to str: swf-transform (a separate repo/process) may send
+        # run_id as an int; this agent's own messages use str. Without
+        # normalizing, transformers_cache/pending_stf_ready keys never match.
+        run_id = str(run_id)
 
         with self._state_lock:
             self.transformers_cache.setdefault(run_id, {})[transformer_id] = {
