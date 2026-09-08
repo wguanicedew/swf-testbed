@@ -354,7 +354,7 @@ class FastProcessingAgent(BaseAgent):
 
         # Auto-inject created_at if not already set by the caller
         if 'created_at' not in message_body:
-            message_body['created_at'] = datetime.utcnow().isoformat()
+            message_body['created_at'] = datetime.now(timezone.utc).isoformat()
 
         # Build STOMP headers: start with defaults, merge caller overrides on top
         run_id = message_body.get('run_id') or self.current_run_id
@@ -521,7 +521,7 @@ class FastProcessingAgent(BaseAgent):
             message = {
                 'msg_type': 'run_imminent_worker',
                 'run_id': run_id,
-                'created_at': datetime.utcnow().isoformat(),
+                'created_at': datetime.now(timezone.utc).isoformat(),
                 'content': content
             }
 
@@ -767,7 +767,7 @@ class FastProcessingAgent(BaseAgent):
             message = {
                 'msg_type': 'end_run',
                 'run_id': run_id,
-                'created_at': datetime.utcnow().isoformat(),
+                'created_at': datetime.now(timezone.utc).isoformat(),
                 'content': content
             }
 
@@ -1103,7 +1103,7 @@ class FastProcessingAgent(BaseAgent):
         message = {
             'msg_type': 'slice',
             'run_id': run_id or self.current_run_id,
-            'created_at': datetime.utcnow().isoformat(),
+            'created_at': datetime.now(timezone.utc).isoformat(),
             'content': content
         }
 

@@ -23,7 +23,7 @@ import json
 import os
 import pickle
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import fast_processing_utils
 
@@ -316,7 +316,7 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
         message = {
             'msg_type': 'slice',
             'run_id': run_id or agent.current_run_id,
-            'created_at': datetime.utcnow().isoformat(),
+            'created_at': datetime.now(timezone.utc).isoformat(),
             'content': content
         }
 
