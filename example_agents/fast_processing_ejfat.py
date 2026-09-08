@@ -74,7 +74,7 @@ def ejfat_reserve_load_balancer(agent, message_data):
     ejfat_config['instance_uri'] = instance_uri.to_string(e2sar_py.EjfatURI.TokenType.instance)
     ejfat_config['lifetime'] = duration
     agent.logger.info(
-        f"EJFAT load balancer '{lb_name}' reserved for {duration}s; instance URI recorded in config",
+        f"EJFAT load balancer '{lb_name}' reserved for {duration}s; instance URI recorded in config: {ejfat_config['instance_uri']}",
         extra=agent._log_extra()
     )
 
