@@ -22,17 +22,118 @@ import base64
 import json
 import os
 import pickle
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 import fast_processing_utils
+
+_EJFAT_TIMESTAMP_RE = re.compile(
+    r'^(?P<base>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(?P<frac>\d+))?(?P<tz>Z|[+-]\d{2}:\d{2})?$'
+)
+
+
+def _ejfat_parse_timestamp(ts_str):
+    """
+    Parse a protobuf Timestamp.ToString()-formatted RFC3339 string (as
+    returned by e2sar_py's LBStatus.expiresAt, e.g. '2027-09-04T09:20:51.986Z')
+    into a timezone-aware datetime. Handles the 0/3/6/9-digit fractional
+    seconds and bare 'Z' suffix that datetime.fromisoformat doesn't accept
+    directly on Python < 3.11.
+    """
+    match = _EJFAT_TIMESTAMP_RE.match(ts_str.strip())
+    if not match:
+        raise ValueError(f"Unrecognized EJFAT timestamp format: {ts_str!r}")
+    frac = (match.group('frac') or '').ljust(6, '0')[:6]
+    tz = match.group('tz') or '+00:00'
+    if tz == 'Z':
+        tz = '+00:00'
+    return datetime.fromisoformat(f"{match.group('base')}.{frac}{tz}")
+
+
+def _ejfat_query_expires_at(lbm, logger):
+    """
+    Query the load balancer's real expiration time from the control plane
+    (rather than trusting a self-tracked reservation duration), via
+    LBManager.get_lb_status()/as_lb_status().expiresAt -- lbm's URI carries
+    the lb_id to query. Returns a timezone-aware datetime, or None if the
+    status couldn't be fetched or parsed (logged).
+    """
+    try:
+        status_reply = lbm.get_lb_status()
+        if status_reply is None:
+            logger.warning("Failed to query EJFAT load balancer status: no reply")
+            return None
+        status = lbm.as_lb_status(status_reply)
+        return _ejfat_parse_timestamp(status.expiresAt)
+    except Exception as e:
+        logger.warning(f"Failed to query EJFAT load balancer expiration: {e}")
+        return None
+
+
+def _ejfat_load_cached_instance_uri(ejfat_config, logger):
+    """
+    Read a previously reserved EJFAT instance URI back from instance_uri_file
+    (if configured), so repeated run_imminent handling -- e.g. across agent
+    restarts -- can reuse an existing load-balancer reservation instead of
+    reserving a new one every time. Returns (instance_uri_str, expires_at)
+    or None if instance_uri_file isn't configured, doesn't exist, is
+    unreadable/malformed, or its reservation has already expired (per the
+    real control-plane expiration recorded when it was reserved).
+    """
+    path = ejfat_config.get('instance_uri_file')
+    if not path or not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, 'rb') as f:
+            cached = tomllib.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read EJFAT instance URI cache {path}: {e}")
+        return None
+
+    instance_uri = cached.get('instance_uri')
+    expires_at_str = cached.get('expires_at')
+    if not instance_uri or not expires_at_str:
+        return None
+
+    try:
+        expires_at = _ejfat_parse_timestamp(expires_at_str)
+    except ValueError:
+        logger.warning(f"Malformed expires_at in EJFAT instance URI cache {path}: {expires_at_str!r}")
+        return None
+
+    if datetime.now(timezone.utc) >= expires_at:
+        return None
+
+    return instance_uri, expires_at
+
+
+def _ejfat_write_instance_uri_file(ejfat_config, instance_uri_str, expires_at, logger):
+    """Record a freshly reserved EJFAT instance URI and its real expiration to instance_uri_file for later reuse."""
+    path = ejfat_config.get('instance_uri_file')
+    if not path:
+        return
+    try:
+        with open(path, 'w') as f:
+            f.write(f"instance_uri = {json.dumps(instance_uri_str)}\n")
+            f.write(f"expires_at = {json.dumps(expires_at.isoformat())}\n")
+    except Exception as e:
+        logger.warning(f"Failed to write EJFAT instance URI cache {path}: {e}")
 
 
 def ejfat_reserve_load_balancer(agent, message_data):
     """
-    Reserve an EJFAT load balancer for this run, then open and start the
-    data-plane Segmenter (registering as a sender on the LB) used to stream
-    TF slice events to it for the rest of the run.
+    Get an EJFAT load balancer instance URI for this run -- reusing one
+    cached in instance_uri_file if it's still valid, otherwise reserving a
+    fresh one and caching it there -- then open and start the data-plane
+    Segmenter (registering as a sender on the LB) used to stream TF slice
+    events to it for the rest of the run.
     """
     agent.logger.info("Reserving EJFAT load balancer", extra=agent._log_extra())
     try:
@@ -44,39 +145,63 @@ def ejfat_reserve_load_balancer(agent, message_data):
         ) from e
 
     ejfat_config = agent.config.setdefault('ejfat', {})
-    admin_uri_str = ejfat_config.get('admin_uri') or os.environ.get('EJFAT_URI')
-    if not admin_uri_str:
-        raise RuntimeError(
-            "streaming_mode='ejfat' requires an admin EJFAT URI to reserve a load balancer: "
-            "set 'admin_uri' in the [ejfat] config section or the EJFAT_URI environment variable."
-        )
-
-    admin_uri = e2sar_py.EjfatURI(uri=admin_uri_str, tt=e2sar_py.EjfatURI.TokenType.admin)
-    lbm = e2sar_py.ControlPlane.LBManager(admin_uri, not ejfat_config.get('insecure', False))
-
-    run_id = message_data.get('run_id') or agent.current_run_id
-    lb_name = ejfat_config.get('lb_name') or f"{agent.agent_name}-{run_id}"
     duration = ejfat_config.get('lb_duration_seconds', 3600)
     if duration:
         duration = int(duration)
 
-    result = lbm.reserve_lb_in_seconds(
-        lb_id=lb_name,
-        seconds=float(duration),
-        senders=ejfat_config.get('senders', []),
-        ip_family=ejfat_config.get('ip_family', 0),
-    )
-    if result.has_error():
-        raise RuntimeError(f"Failed to reserve EJFAT load balancer: {result.error().message}")
+    cached = _ejfat_load_cached_instance_uri(ejfat_config, agent.logger)
+    if cached:
+        cached_instance_uri_str, expires_at = cached
+        agent.logger.info(
+            f"Reusing cached EJFAT instance URI from {ejfat_config['instance_uri_file']} "
+            f"(expires {expires_at.isoformat()}): {cached_instance_uri_str}",
+            extra=agent._log_extra()
+        )
+        instance_uri = e2sar_py.EjfatURI(uri=cached_instance_uri_str, tt=e2sar_py.EjfatURI.TokenType.instance)
+    else:
+        admin_uri_str = ejfat_config.get('admin_uri') or os.environ.get('EJFAT_URI')
+        if not admin_uri_str:
+            raise RuntimeError(
+                "streaming_mode='ejfat' requires an admin EJFAT URI to reserve a load balancer: "
+                "set 'admin_uri' in the [ejfat] config section or the EJFAT_URI environment variable."
+            )
 
-    agent._ejfat_lbm = lbm
-    instance_uri = lbm.get_uri()
-    ejfat_config['instance_uri'] = instance_uri.to_string(e2sar_py.EjfatURI.TokenType.instance)
-    ejfat_config['lifetime'] = duration
-    agent.logger.info(
-        f"EJFAT load balancer '{lb_name}' reserved for {duration}s; instance URI recorded in config: {ejfat_config['instance_uri']}",
-        extra=agent._log_extra()
-    )
+        admin_uri = e2sar_py.EjfatURI(uri=admin_uri_str, tt=e2sar_py.EjfatURI.TokenType.admin)
+        lbm = e2sar_py.ControlPlane.LBManager(admin_uri, not ejfat_config.get('insecure', False))
+
+        run_id = message_data.get('run_id') or agent.current_run_id
+        lb_name = ejfat_config.get('lb_name') or f"{agent.agent_name}-{run_id}"
+
+        result = lbm.reserve_lb_in_seconds(
+            lb_id=lb_name,
+            seconds=float(duration),
+            senders=ejfat_config.get('senders', []),
+            ip_family=ejfat_config.get('ip_family', 0),
+        )
+        if result.has_error():
+            raise RuntimeError(f"Failed to reserve EJFAT load balancer: {result.error().message}")
+
+        agent._ejfat_lbm = lbm
+        instance_uri = lbm.get_uri()
+        cached_instance_uri_str = instance_uri.to_string(e2sar_py.EjfatURI.TokenType.instance)
+
+        expires_at = _ejfat_query_expires_at(lbm, agent.logger)
+        if expires_at is None:
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration or 3600)
+            agent.logger.warning(
+                f"Could not query real EJFAT expiration; falling back to configured lb_duration_seconds={duration}",
+                extra=agent._log_extra()
+            )
+
+        agent.logger.info(
+            f"EJFAT load balancer '{lb_name}' reserved, expires {expires_at.isoformat()}; "
+            f"instance URI recorded in config: {cached_instance_uri_str}",
+            extra=agent._log_extra()
+        )
+        _ejfat_write_instance_uri_file(ejfat_config, cached_instance_uri_str, expires_at, agent.logger)
+
+    ejfat_config['instance_uri'] = cached_instance_uri_str
+    ejfat_config['lifetime'] = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
 
     sflags = e2sar_py.DataPlane.Segmenter.SegmenterFlags()
     sflags.useCP = ejfat_config.get('use_cp', True)
@@ -124,7 +249,8 @@ def ejfat_free_load_balancer(agent):
             pass
         agent._ejfat_sender_lbm = None
 
-    agent.config.get('ejfat', {}).pop('instance_uri', None)
+    ejfat_config = agent.config.get('ejfat', {})
+    ejfat_config.pop('instance_uri', None)
 
     lbm = getattr(agent, '_ejfat_lbm', None)
     if lbm is None:
@@ -437,9 +563,10 @@ def handle_end_run_ejfat(agent, message_data):
     ActiveMQ path, run while agent.current_run_id/current_execution_id are
     still set so that broadcast carries the right run/execution ids.
     """
-    run_id = message_data.get('run_id') or agent.current_run_id
-    if fast_processing_utils.check_run_terminated(run_id, agent, agent.logger):
-        ejfat_free_load_balancer(agent)
+    # Not free the load balancer here.
+    # run_id = message_data.get('run_id') or agent.current_run_id
+    # if fast_processing_utils.check_run_terminated(run_id, agent, agent.logger):
+    #     ejfat_free_load_balancer(agent)
 
     agent.handle_end_run_activemq(message_data)
 
@@ -459,4 +586,5 @@ def _finalize_run_if_terminal_ejfat(agent, tf_file_id):
             f"All FastMonFiles for run={run_id} are terminal, freeing EJFAT load balancer",
             extra=agent._log_extra(tf_file_id=tf_file_id)
         )
-        ejfat_free_load_balancer(agent)
+        # Not free the load balancer here.
+        # ejfat_free_load_balancer(agent)

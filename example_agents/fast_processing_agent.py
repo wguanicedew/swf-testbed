@@ -119,7 +119,7 @@ class FastProcessingAgent(BaseAgent):
             "tfs_per_subsample": 20,  # Number of TFs per subsample file
             # EJFAT streaming parameters (used only when streaming_mode == 'ejfat'),
             # populated from the [ejfat] section of the config file. Recognized keys:
-            # uri, data_id, event_src_id, use_cp, rate_gbps, mtu, event_size_bytes.
+            # admin_uri, instance_uri_file, data_id, event_src_id, use_cp, rate_gbps, mtu, event_size_bytes.
             "ejfat": {},
             # Worker sizing (broadcast to PanDA transformer workers on run_imminent)
             "target_worker_count": 1,
