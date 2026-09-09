@@ -233,12 +233,6 @@ class FastProcessingAgent(BaseAgent):
                 self.send_heartbeat()
             except Exception:
                 pass
-            if self.config.get('streaming_mode') == 'ejfat':
-                try:
-                    from fast_processing_ejfat import ejfat_free_load_balancer
-                    ejfat_free_load_balancer(self)
-                except Exception:
-                    pass
             try:
                 if self.mq_connected:
                     self.conn.disconnect()
