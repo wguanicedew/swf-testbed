@@ -152,9 +152,10 @@ def ejfat_reserve_load_balancer(agent, message_data):
     cached = _ejfat_load_cached_instance_uri(ejfat_config, agent.logger)
     if cached:
         cached_instance_uri_str, expires_at = cached
+        lifetime = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
         agent.logger.info(
             f"Reusing cached EJFAT instance URI from {ejfat_config['instance_uri_file']} "
-            f"(expires {expires_at.isoformat()}): {cached_instance_uri_str}",
+            f"(expires {expires_at.isoformat()}, lifetime {lifetime}s): {cached_instance_uri_str}",
             extra=agent._log_extra()
         )
         instance_uri = e2sar_py.EjfatURI(uri=cached_instance_uri_str, tt=e2sar_py.EjfatURI.TokenType.instance)
