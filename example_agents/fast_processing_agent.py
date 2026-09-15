@@ -1012,6 +1012,10 @@ class FastProcessingAgent(BaseAgent):
             return slices
 
         num_slices = math.ceil(tf_count / tfs_per_slice)
+        self.logger.info(
+            f"Slicing {tf_filename}: tfs_per_subsample={tf_count}, tfs_per_slice={tfs_per_slice} -> num_slices={num_slices}",
+            extra=self._log_extra(tf_filename=tf_filename, tfs_per_subsample=tf_count, tfs_per_slice=tfs_per_slice, num_slices=num_slices)
+        )
 
         for i in range(num_slices):
             slice_tf_first = tf_first + i * tfs_per_slice

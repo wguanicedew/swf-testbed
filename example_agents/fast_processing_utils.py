@@ -88,6 +88,11 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
         n_files = max(1, total_sampled // tfs_per_subsample)
         partition_width = tf_count // n_files
 
+        logger.info(
+            f"Simulating TF subsamples for {stf_file.get('filename')}: "
+            f"stf_tf_count={tf_count}, tfs_per_subsample={tfs_per_subsample} -> n_files={n_files}"
+        )
+
         tf_subsamples = []
         base_filename = stf_file.get("filename", "unknown").rsplit('.', 1)[0]
 
