@@ -489,7 +489,7 @@ class FastProcessingAgent(BaseAgent):
 
         self._log_system_event('run_imminent', {
             'execution_id': self.current_execution_id,
-            'target_worker_count': self.config.get('target_worker_count', 0),
+            'target_worker_count': fast_processing.get('target_worker_count', self.config.get('target_worker_count', 0)),
             'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
             'slices_per_sample': slices_per_sample,
             'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
@@ -501,14 +501,15 @@ class FastProcessingAgent(BaseAgent):
             # Put the incoming message_data inside 'content' and add execution_id
             # and target_worker_count so workers know how many to spin up.
             content = dict(message_data or {})
+            target_worker_count = fast_processing.get('target_worker_count', self.config.get('target_worker_count', 1))
             content.update({
                 'execution_id': self.current_execution_id,
-                'core_count': self.config.get('target_worker_count', 1),
-                'memory_per_core': self.config.get('memory_per_core', 4000),
-                'target_worker_count': self.config.get('target_worker_count', 1),
-                'slice_processing_time': self.config.get('slice_processing_time', 1),
-                'worker_rampup_time': self.config.get('worker_rampup_time', 1),
-                'worker_rampdown_time': self.config.get('worker_rampdown_time', 1),
+                'core_count': target_worker_count,
+                'memory_per_core': fast_processing.get('memory_per_core', self.config.get('memory_per_core', 4000)),
+                'target_worker_count': target_worker_count,
+                'slice_processing_time': fast_processing.get('slice_processing_time', self.config.get('slice_processing_time', 1)),
+                'worker_rampup_time': fast_processing.get('worker_rampup_time', self.config.get('worker_rampup_time', 1)),
+                'worker_rampdown_time': fast_processing.get('worker_rampdown_time', self.config.get('worker_rampdown_time', 1)),
                 'streaming_mode': self.config.get('streaming_mode', 'activemq'),
             })
             if content['streaming_mode'] == 'ejfat':
