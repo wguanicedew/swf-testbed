@@ -380,7 +380,7 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
         extra=agent._log_extra(tf_filename=tf_filename, stf_filename=stf_filename)
     )
 
-    num_tf_per_slice = fast_processing.get('num_tf_per_slice', agent.config.get('tfs_per_subsample', 2))
+    tfs_per_slice = fast_processing.get('tfs_per_slice', agent.config.get('tfs_per_slice', 4))
 
     epic_image, epic_version, processor_type = fast_processing_utils.resolve_epic_params(
         fast_processing, agent.config, agent.logger
@@ -390,7 +390,7 @@ def _handle_slice_ejfat(agent, message_data, fast_processing=None):
 
     # Create TF slices from this TF sample; one slice becomes one EJFAT event.
     slices = agent._create_tf_slices(
-        run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path
+        run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, tfs_per_slice, dest_path
     )
 
     event_size_bytes = agent.config.get('ejfat', {}).get('event_size_bytes', 1024)

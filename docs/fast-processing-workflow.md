@@ -170,7 +170,7 @@ stf_count = 10              # STF files to generate
 physics_period_count = 1    # Physics periods per run
 target_worker_count = 30    # Target PanDA workers
 stf_sampling_rate = 1.0     # Fraction of STFs to sample (1.0 = 100%)
-slices_per_sample = 15      # TF slices per STF sample
+tfs_per_slice = 2           # TFs per processing slice (slices_per_sample = tfs_per_subsample / tfs_per_slice)
 slice_processing_time = 30  # Seconds per slice (for planning)
 ```
 

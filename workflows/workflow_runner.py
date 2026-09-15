@@ -6,6 +6,7 @@ Default mode: Persistent agent listening for workflow commands on 'workflow_cont
 CLI mode (--run-once): Execute single workflow and exit.
 """
 
+import math
 import os
 import re
 import subprocess
@@ -711,6 +712,9 @@ class WorkflowRunner(BaseAgent):
             if config and section in config:
                 workflow_params.update(config[section])
 
+        tfs_per_subsample = workflow_params.get('tfs_per_subsample', 20)
+        tfs_per_slice = workflow_params.get('tfs_per_slice', 4)
+
         state_data = {
             'run_number': state_id,
             'phase': 'initializing',
@@ -728,7 +732,7 @@ class WorkflowRunner(BaseAgent):
             'metadata': {
                 'execution_id': execution_id,
                 'stf_sampling_rate': workflow_params.get('stf_sampling_rate'),
-                'slices_per_sample': workflow_params.get('slices_per_sample')
+                'slices_per_sample': math.ceil(tfs_per_subsample / tfs_per_slice)
             }
         }
 

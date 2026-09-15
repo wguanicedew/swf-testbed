@@ -208,7 +208,7 @@ physics_period_count = 1        # Single physics period
 # Fast processing parameters
 target_worker_count = 30        # Target number of workers
 stf_sampling_rate = 0.05        # FastMon sampling fraction (5%)
-slices_per_sample = 15          # TF slices per STF sample
+tfs_per_slice = 2               # TFs per processing slice (slices_per_sample = tfs_per_subsample / tfs_per_slice)
 slice_processing_time = 30      # Processing time per slice (seconds)
 worker_rampup_time = 300        # Worker startup time (5 min)
 worker_rampdown_time = 60       # Graceful shutdown time (1 min)
@@ -398,7 +398,7 @@ Workflows integrate seamlessly with the agent-based messaging system:
 **Example Message Flow:**
 1. WorkflowRunner broadcasts `run_imminent` with `execution_id`
 2. `fast_processing_agent` receives message, queries WorkflowExecution
-3. Agent extracts `target_worker_count`, `slices_per_sample` from parameters
+3. Agent extracts `target_worker_count`, `tfs_per_slice` from parameters
 4. Agent initiates worker preparation based on configuration
 5. Workflow broadcasts `stf_gen` messages
 6. Agent creates TF slices and distributes to workers

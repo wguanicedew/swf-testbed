@@ -32,6 +32,12 @@ base class and contain only the logic specific to their role.
     pip install -r requirements.txt
     ```
 
+    If you will run the EJFAT fast-processing agent (`fast_processing_ejfat.py`),
+    also install its extra dependencies for reading EIC ROOT files over xrootd:
+    ```bash
+    pip install -r requirements-ejfat.txt
+    ```
+
 ## Configuration
 
 The agents are configured via environment variables, which are read by the

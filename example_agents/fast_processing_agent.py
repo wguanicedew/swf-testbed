@@ -15,6 +15,7 @@ Message format specification: https://github.com/wguanicedew/iDDS/blob/dev/main/
 import os
 import signal
 import time
+import math
 import logging
 import threading
 import traceback
@@ -117,6 +118,7 @@ class FastProcessingAgent(BaseAgent):
             "run_id_lifetime": 2,       # Days to keep run_id in runs_sampled cache
             "streaming_mode": "activemq",  # 'activemq' (default) or 'ejfat'
             "tfs_per_subsample": 20,  # Number of TFs per subsample file
+            "tfs_per_slice": 4,  # Number of TFs per slice sent to transformer queue
             # EJFAT streaming parameters (used only when streaming_mode == 'ejfat'),
             # populated from the [ejfat] section of the config file. Recognized keys:
             # admin_uri, instance_uri_file, data_id, event_src_id, use_cp, rate_gbps, mtu, event_size_bytes.
@@ -481,11 +483,15 @@ class FastProcessingAgent(BaseAgent):
         )
         fast_processing = workflow_params.get("fast_processing", {})
 
+        tfs_per_subsample = fast_processing.get('tfs_per_subsample', self.config.get('tfs_per_subsample', 20))
+        tfs_per_slice = fast_processing.get('tfs_per_slice', self.config.get('tfs_per_slice', 4))
+        slices_per_sample = math.ceil(tfs_per_subsample / tfs_per_slice)
+
         self._log_system_event('run_imminent', {
             'execution_id': self.current_execution_id,
             'target_worker_count': self.config.get('target_worker_count', 0),
             'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
-            'slices_per_sample': fast_processing.get('slices_per_sample', 0),
+            'slices_per_sample': slices_per_sample,
             'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
         })
 
@@ -593,7 +599,7 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error("No filename provided in message", extra=self._log_extra())
             return tf_files_processed
 
-        # Get num_tf_per_slice from workflow params
+        # Get tfs_per_slice from workflow params
         workflow_params = self._get_workflow_params(
             message_data.get('run_id') or self.current_run_id,
             message_data.get('execution_id') or self.current_execution_id
@@ -667,8 +673,8 @@ class FastProcessingAgent(BaseAgent):
                          extra=self._log_extra(tf_filename=tf_filename, stf_filename=stf_filename))
         
 
-        num_tf_per_slice = fast_processing.get('num_tf_per_slice', self.config.get('tfs_per_subsample', 2))
-        
+        tfs_per_slice = fast_processing.get('tfs_per_slice', self.config.get('tfs_per_slice', 4))
+
         epic_image, epic_version, processor_type = fast_processing_utils.resolve_epic_params(
             fast_processing, self.config, self.logger
         )
@@ -677,7 +683,7 @@ class FastProcessingAgent(BaseAgent):
         run_id = message_data.get('run_id')
 
         # Create TF slices from this TF sample
-        slices = self._create_tf_slices(run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path)
+        slices = self._create_tf_slices(run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, tfs_per_slice, dest_path)
 
         # Push each slice to transformer queue
         for slice_data in slices:
@@ -989,16 +995,15 @@ class FastProcessingAgent(BaseAgent):
             self.logger.error(f"Error updating RunState slices: {e}",
                               extra=self._log_extra(error=str(e)))
 
-    def _create_tf_slices(self, run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, num_tf_per_slice, dest_path=None):
+    def _create_tf_slices(self, run_id, tf_filename, tf_file_id, stf_filename, tf_first, tf_last, tf_count, tfs_per_slice, dest_path=None):
         """
         Create TF slice records in database, based on the TF file's range [tf_first, tf_last].
 
-        Slices divide the TF file's range into chunks of num_tf_per_slice TFs each.
+        Slices divide the TF file's range into chunks of tfs_per_slice TFs each.
         Slice filenames are derived from tf_filename.
 
         Returns list of slice data dictionaries for sending to queue.
         """
-        import math
         slices = []
 
         if tf_last is None or tf_count is None:
@@ -1006,11 +1011,11 @@ class FastProcessingAgent(BaseAgent):
                               extra=self._log_extra(tf_filename=tf_filename))
             return slices
 
-        num_slices = math.ceil(tf_count / num_tf_per_slice)
+        num_slices = math.ceil(tf_count / tfs_per_slice)
 
         for i in range(num_slices):
-            slice_tf_first = tf_first + i * num_tf_per_slice
-            slice_tf_last = min(slice_tf_first + num_tf_per_slice - 1, tf_last)
+            slice_tf_first = tf_first + i * tfs_per_slice
+            slice_tf_last = min(slice_tf_first + tfs_per_slice - 1, tf_last)
             slice_tf_count = slice_tf_last - slice_tf_first + 1
 
             slice_data = {
