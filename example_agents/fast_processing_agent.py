@@ -214,7 +214,7 @@ class FastProcessingAgent(BaseAgent):
 
             logging.info(f"{self.agent_name} is running. Press Ctrl+C to stop.")
             last_pool_status_log = time.monotonic()
-            pool_status_log_interval = 180  # 3 minutes
+            pool_status_log_interval = 60  # 1 minutes
             while True:
                 time.sleep(60)
                 if not self.mq_connected:
@@ -412,12 +412,17 @@ class FastProcessingAgent(BaseAgent):
             if msg_type == 'run_imminent':
                 # Offloaded: reserves the EJFAT load balancer (ejfat mode) or
                 # fetches workflow params via a blocking REST call (activemq mode).
+                self.logger.info(f"Received run_imminent message (run_id={message_data.get('run_id')})", extra=self._log_extra())
                 self.run_in_background(self.handle_run_imminent, message_data, label='run_imminent')
             elif msg_type == 'start_run':
                 self.handle_start_run(message_data)
             elif msg_type == 'stf_ready':
                 # Offloaded: loops over TF sub-samples doing blocking REST calls
                 # (record_tf_file, update_tf_file_status, ...) per stf_ready message.
+                self.logger.info(
+                    f"Received stf_ready message (run_id={message_data.get('run_id')}, slice_id={message_data.get('slice_id')}): {message_data.get('filename') or 'unknown filename'}",
+                    extra=self._log_extra()
+                )
                 self.run_in_background(self.handle_stf_ready, message_data, label='stf_ready')
             elif msg_type == 'pause_run':
                 self.handle_pause_run(message_data)
@@ -427,6 +432,7 @@ class FastProcessingAgent(BaseAgent):
                 self.handle_end_run(message_data)
             elif msg_type == 'slice_result':
                 # Offloaded: updates the TFSlice record via a blocking REST call.
+                self.logger.info(f"Received slice_result message (run_id={message_data.get('run_id')}, slice_id={message_data.get('slice_id')}): {message_data.get('filename') or 'unknown filename'}", extra=self._log_extra())
                 self.run_in_background(self.handle_slice_result, message_data, label='slice_result')
             elif msg_type == 'transformer_ready':
                 self.handle_transformer_ready(message_data)
@@ -472,6 +478,7 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_run_imminent(self, message_data):
         """Dispatch run_imminent handling based on the configured streaming_mode."""
+        self.logger.info("Start to process run_imminent message", extra=self._log_extra())
         if self.config.get('streaming_mode') == 'ejfat':
             from fast_processing_ejfat import handle_run_imminent_ejfat
             return handle_run_imminent_ejfat(self, message_data)
@@ -561,7 +568,7 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_stf_ready(self, message_data):
         """Dispatch stf_ready handling based on the configured streaming_mode."""
-        self.logger.info(f"Received stf_ready message: {message_data.get('filename') or 'unknown filename'}",
+        self.logger.info(f"Start to process stf_ready message: {message_data.get('filename') or 'unknown filename'}",
                          extra=self._log_extra())
 
         if self.config.get('streaming_mode') == 'ejfat':
@@ -800,7 +807,7 @@ class FastProcessingAgent(BaseAgent):
 
     def handle_slice_result(self, message_data):
         """Process slice_result messages from transformer workers."""
-        logging.info(f"Received slice_result message: {message_data}")
+        self.logger.info(f"Start to process slice_result message: {message_data}", extra=self._log_extra())
         with self._state_lock:
             self.stats['results_received'] += 1
 
