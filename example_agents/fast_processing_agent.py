@@ -213,11 +213,18 @@ class FastProcessingAgent(BaseAgent):
             self.send_heartbeat()
 
             logging.info(f"{self.agent_name} is running. Press Ctrl+C to stop.")
+            last_pool_status_log = time.monotonic()
+            pool_status_log_interval = 180  # 3 minutes
             while True:
                 time.sleep(60)
                 if not self.mq_connected:
                     self._attempt_reconnect()
                 self.send_heartbeat()
+                if time.monotonic() - last_pool_status_log >= pool_status_log_interval:
+                    last_pool_status_log = time.monotonic()
+                    pool_status = self.get_background_pool_status()
+                    if pool_status:
+                        logging.info(f"Background pool status: {pool_status}")
 
         except KeyboardInterrupt:
             logging.info(f"Stopping {self.agent_name}...")
