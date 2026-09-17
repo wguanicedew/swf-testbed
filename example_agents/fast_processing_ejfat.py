@@ -33,6 +33,44 @@ except ModuleNotFoundError:
 
 import fast_processing_utils
 
+# Same socket-buffer-size and MTU auto-detection approach as ../E2SAR/python/client.py's
+# _max_socket_buf_size/_system_mtu, so the sender gets sane defaults without requiring
+# 'bufsize'/'mtu' in the [ejfat] config section.
+_DEFAULT_SOCKET_BUF_SIZE = 1024 * 1024 * 3  # matches the library default (e2sarDPSegmenter::SegmenterFlags)
+_SOCKET_BUF_SIZE_MARGIN = 0.7  # stay under the Linux max: each send thread opens its own socket,
+# so requesting the full net.core.wmem_max per-socket over-commits kernel memory with many threads
+
+
+def _ejfat_max_socket_buf_size(sysctl_name):
+    """Read a safety margin below the Linux-allowed max socket buffer size
+    (net.core.{r,w}mem_max); falls back to the library default on non-Linux or if unreadable."""
+    try:
+        with open(f"/proc/sys/net/core/{sysctl_name}") as f:
+            return int(int(f.read().strip()) * _SOCKET_BUF_SIZE_MARGIN)
+    except (OSError, ValueError):
+        return _DEFAULT_SOCKET_BUF_SIZE
+
+
+_DEFAULT_MTU = 1500  # matches the library default (e2sarDPSegmenter::SegmenterFlags)
+_MTU_MARGIN = 0.9  # leave headroom below the interface MTU for IP/UDP/LB/RE header overhead
+
+
+def _ejfat_system_mtu():
+    """Detect the MTU of the interface used for the default route and apply a safety margin;
+    falls back to _DEFAULT_MTU on non-Linux or if detection fails."""
+    try:
+        with open("/proc/net/route") as f:
+            for line in f.readlines()[1:]:
+                fields = line.split()
+                iface, dest, flags = fields[0], fields[1], int(fields[3], 16)
+                if dest == "00000000" and flags & 0x2:  # RTF_GATEWAY
+                    with open(f"/sys/class/net/{iface}/mtu") as mf:
+                        return int(int(mf.read().strip()) * _MTU_MARGIN)
+    except (OSError, ValueError, IndexError):
+        pass
+    return _DEFAULT_MTU
+
+
 _EJFAT_TIMESTAMP_RE = re.compile(
     r'^(?P<base>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(?P<frac>\d+))?(?P<tz>Z|[+-]\d{2}:\d{2})?$'
 )
@@ -207,7 +245,8 @@ def ejfat_reserve_load_balancer(agent, message_data):
     sflags = e2sar_py.DataPlane.Segmenter.SegmenterFlags()
     sflags.useCP = ejfat_config.get('use_cp', True)
     sflags.rateGbps = ejfat_config.get('rate_gbps', -1.0)
-    sflags.mtu = ejfat_config.get('mtu', 0)
+    sflags.mtu = ejfat_config.get('mtu') or _ejfat_system_mtu()
+    sflags.sndSocketBufSize = ejfat_config.get('bufsize') or _ejfat_max_socket_buf_size('wmem_max')
 
     data_id = ejfat_config.get('data_id', 0)
     event_src_id = ejfat_config.get('event_src_id', 0)
@@ -226,8 +265,10 @@ def ejfat_reserve_load_balancer(agent, message_data):
 
     agent._ejfat_segmenter = segmenter
     agent._ejfat_sender_lbm = sender_lbm
+    agent._ejfat_events_sent = 0
     agent.logger.info(
-        f"EJFAT segmenter started (data_id={data_id}, event_src_id={event_src_id}, mtu={segmenter.getMTU()})"
+        f"EJFAT segmenter started (data_id={data_id}, event_src_id={event_src_id}, "
+        f"mtu={segmenter.getMTU()}, sndSocketBufSize={sflags.sndSocketBufSize})"
     )
 
 
@@ -271,6 +312,9 @@ def ejfat_send_event(agent, payload):
     """
     Send one event's payload through the EJFAT segmenter opened by
     ejfat_reserve_load_balancer. Returns True on success, False on failure (logged).
+
+    Every 10 successfully sent events, logs cumulative send stats (fragments/errors)
+    from the segmenter -- same cadence/fields as ../E2SAR/python/client.py's sender loop.
     """
     agent.logger.debug(f"Sending EJFAT event of {len(payload)} bytes", extra=agent._log_extra())
     segmenter = getattr(agent, '_ejfat_segmenter', None)
@@ -285,6 +329,15 @@ def ejfat_send_event(agent, payload):
         agent.logger.error(f"Failed to send EJFAT event: {result.error().message}",
                             extra=agent._log_extra())
         return False
+
+    agent._ejfat_events_sent = getattr(agent, '_ejfat_events_sent', 0) + 1
+    if agent._ejfat_events_sent % 10 == 0:
+        stats = segmenter.getSendStats()
+        agent.logger.info(
+            f"EJFAT send stats: sent {agent._ejfat_events_sent} events, "
+            f"{stats.msgCnt} fragments, {stats.errCnt} errors",
+            extra=agent._log_extra()
+        )
     return True
 
 
