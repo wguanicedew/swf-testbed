@@ -111,7 +111,6 @@ class FastProcessingAgent(BaseAgent):
             "stf_sampling_rate": 0.1,  # 10% of files
             # TF simulation parameters
             "tf_files_per_stf": 7,  # Number of TF files to generate per STF
-            "tf_size_fraction": 0.15,  # Fraction of partition TF count per subsample (with gaussian noise)
             "tf_count_per_stf": 1000,  # Default total TF count per STF if not provided in stf_ready message
             "tf_sequence_start": 1,  # Starting sequence number for TF files
             "no_duplicate_mode": False,  # Set True to skip notification for already-registered TF files

@@ -56,7 +56,7 @@ def calculate_checksum(file_path: str, logger: logging.Logger) -> str:
         return ""
 
 
-def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, config: dict, logger: logging.Logger, agent_name: str, force_sample: bool = False) -> List[Dict[str, Any]]:
+def simulate_tf_subsamples_old(stf_file: Dict[str, Any], fast_processing: dict, config: dict, logger: logging.Logger, agent_name: str, force_sample: bool = False) -> List[Dict[str, Any]]:
     """
     Simulate creation of Time Frame (TF) subsamples from a Super Time Frame (STF) file.
 
@@ -126,6 +126,104 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
                     "simulation": True,
                     "created_from": stf_file.get('filename'),
                     "tf_size_fraction": tf_size_fraction,
+                    "tfs_per_subsample": tfs_per_subsample,
+                    "agent_name": agent_name,
+                    "state": stf_file.get('state'),
+                    "substate": stf_file.get('substate'),
+                    "start": stf_file.get('start'),
+                    "end": stf_file.get('end'),
+                }
+            }
+
+            tf_subsamples.append(tf_metadata)
+
+        return tf_subsamples
+
+    except Exception as e:
+        logger.error(f"Unexpected error simulating TF subsamples: {e}", extra=log_extra)
+        return []
+
+
+def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, config: dict, logger: logging.Logger, agent_name: str, force_sample: bool = False) -> List[Dict[str, Any]]:
+    """
+    Simulate creation of Time Frame (TF) subsamples from a Super Time Frame (STF) file.
+
+    Every STF file is sampled. The total TFs to sample is tf_count * stf_sampling_rate,
+    selected at random with a granularity of tfs_per_subsample: the STF yields
+    n_files = round(tf_count * stf_sampling_rate / tfs_per_subsample) subsamples, each a
+    block of tfs_per_subsample contiguous TFs. Block positions are drawn uniformly at
+    random over the STF range, without overlaps.
+
+    Args:
+        stf_file: STF data dictionary (follows the keys from daq agent)
+        fast_processing: fast_processing workflow parameters (override config)
+        config: Configuration dictionary
+        logger: Logger instance
+        agent_name: Name of the agent creating the subsamples
+        force_sample: Produce at least one subsample even if the sampling rate rounds to zero
+
+    Returns:
+        List of TF metadata dictionaries, ordered by tf_first
+    """
+    # run_id from the STF message itself, not the agent's current run (concurrent runs)
+    run_id = stf_file.get("run_id")
+    log_extra = {'run_id': run_id} if run_id else {}
+    try:
+        stf_sampling_rate = fast_processing.get("stf_sampling_rate", config.get("stf_sampling_rate", 1.0))
+        tfs_per_subsample = fast_processing.get("tfs_per_subsample", config.get("tfs_per_subsample", 20))
+        tf_sequence_start = fast_processing.get("tf_sequence_start", config.get("tf_sequence_start", 1))
+
+        tf_count = stf_file.get("tf_count") or fast_processing.get("tf_count_per_stf", config.get("tf_count_per_stf", 1000))
+        subsample_size = min(tfs_per_subsample, tf_count)
+        if subsample_size <= 0:
+            logger.warning(f"No TFs to sample: tf_count={tf_count}, tfs_per_subsample={tfs_per_subsample}", extra=log_extra)
+            return []
+
+        max_files = tf_count // subsample_size
+        n_files = min(max_files, round(tf_count * stf_sampling_rate / subsample_size))
+        if force_sample:
+            n_files = max(1, n_files)
+        if n_files <= 0:
+            logger.debug(f"STF file skipped: stf_sampling_rate={stf_sampling_rate}, tf_count={tf_count} "
+                         f"too small for tfs_per_subsample={tfs_per_subsample}", extra=log_extra)
+            return []
+
+        # Place n_files non-overlapping blocks of subsample_size uniformly at random:
+        # choose n_files sorted slots out of the free positions, then shift each by the
+        # space taken by the blocks before it.
+        free_slots = tf_count - n_files * subsample_size + n_files
+        slots = sorted(random.sample(range(free_slots), n_files))
+        tf_firsts = [slot + i * (subsample_size - 1) for i, slot in enumerate(slots)]
+
+        logger.info(
+            f"Simulating TF subsamples for {stf_file.get('filename')}: "
+            f"stf_tf_count={tf_count}, stf_sampling_rate={stf_sampling_rate}, "
+            f"tfs_per_subsample={tfs_per_subsample} -> n_files={n_files}",
+            extra=log_extra
+        )
+
+        tf_subsamples = []
+        base_filename = stf_file.get("filename", "unknown").rsplit('.', 1)[0]
+
+        for i, tf_first in enumerate(tf_firsts):
+            sequence_number = tf_sequence_start + i
+            tf_last = tf_first + subsample_size - 1
+
+            tf_filename = f"{base_filename}_tf_{run_id}_{sequence_number:03d}.tf"
+
+            tf_metadata = {
+                "tf_filename": tf_filename,
+                "tf_first": tf_first,
+                "tf_last": tf_last,
+                "tf_count": subsample_size,
+                "file_size_bytes": subsample_size,
+                "sequence_number": sequence_number,
+                "run_id": run_id,
+                "stf_parent": stf_file.get("filename"),
+                "metadata": {
+                    "simulation": True,
+                    "created_from": stf_file.get('filename'),
+                    "stf_sampling_rate": stf_sampling_rate,
                     "tfs_per_subsample": tfs_per_subsample,
                     "agent_name": agent_name,
                     "state": stf_file.get('state'),
