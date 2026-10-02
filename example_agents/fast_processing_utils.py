@@ -73,10 +73,13 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
     Returns:
         List of TF metadata dictionaries
     """
+    # run_id from the STF message itself, not the agent's current run (concurrent runs)
+    run_id = stf_file.get("run_id")
+    log_extra = {'run_id': run_id} if run_id else {}
     try:
         stf_sampling_rate = fast_processing.get("stf_sampling_rate", config.get("stf_sampling_rate", 1.0))
         if not force_sample and random.random() >= stf_sampling_rate:
-            logger.debug(f"STF file skipped by stf_sampling_rate={stf_sampling_rate}")
+            logger.debug(f"STF file skipped by stf_sampling_rate={stf_sampling_rate}", extra=log_extra)
             return []
 
         tf_size_fraction = fast_processing.get("tf_size_fraction", config.get("tf_size_fraction", 0.15))
@@ -90,7 +93,8 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
 
         logger.info(
             f"Simulating TF subsamples for {stf_file.get('filename')}: "
-            f"stf_tf_count={tf_count}, tfs_per_subsample={tfs_per_subsample} -> n_files={n_files}"
+            f"stf_tf_count={tf_count}, tfs_per_subsample={tfs_per_subsample} -> n_files={n_files}",
+            extra=log_extra
         )
 
         tf_subsamples = []
@@ -107,7 +111,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
             tf_first = random.randint(partition_start, max_start) if max_start > partition_start else partition_start
             tf_last = tf_first + sample_size - 1
 
-            tf_filename = f"{base_filename}_tf_{stf_file.get('run_id')}_{sequence_number:03d}.tf"
+            tf_filename = f"{base_filename}_tf_{run_id}_{sequence_number:03d}.tf"
 
             tf_metadata = {
                 "tf_filename": tf_filename,
@@ -116,7 +120,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
                 "tf_count": tf_last - tf_first + 1,
                 "file_size_bytes": tfs_per_subsample,
                 "sequence_number": sequence_number,
-                "run_id": stf_file.get("run_id"),
+                "run_id": run_id,
                 "stf_parent": stf_file.get("filename"),
                 "metadata": {
                     "simulation": True,
@@ -136,7 +140,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
         return tf_subsamples
 
     except Exception as e:
-        logger.error(f"Unexpected error simulating TF subsamples: {e}")
+        logger.error(f"Unexpected error simulating TF subsamples: {e}", extra=log_extra)
         return []
 
 
@@ -153,6 +157,8 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
     Returns:
         FastMonFile data dictionary or None if failed
     """
+    run_id = tf_metadata.get("run_id")
+    log_extra = {'run_id': run_id} if run_id else {}
     try:
         # Prepare FastMonFile data for API
         tf_file_data = {
@@ -168,27 +174,26 @@ def record_tf_file(tf_metadata: Dict[str, Any], config: dict, agent, logger: log
         
         # Check if TF file already registered
         tf_filename = tf_metadata["tf_filename"]
-        run_id = tf_metadata.get("run_id")
         existing = agent.call_monitor_api('GET', f'/fastmon-files/?run_id={run_id}&tf_filename={tf_filename}')
         if existing:
             match = next((r for r in existing if r.get('tf_filename') == tf_filename), None)
             if match:
                 # logger.debug(f"TF file {tf_filename} already registered with ID {match.get('tf_file_id')}, skipping registration")
-                logger.info(f"TF file already registered with ID {match.get('tf_file_id')}, skipping registration", extra={'tf_filename': tf_filename, 'tf_file_id': match.get('tf_file_id')})
+                logger.info(f"TF file already registered with ID {match.get('tf_file_id')}, skipping registration", extra={**log_extra, 'tf_filename': tf_filename, 'tf_file_id': match.get('tf_file_id')})
                 return {**match, '_already_registered': True}
 
         # Create TF file record via FastMonFile API
         tf_file = agent.call_monitor_api('post', '/fastmon-files/', tf_file_data)
         tf_file_id = tf_file.get('tf_file_id') or tf_file.get('id') or 'unknown'
-        logger.debug(f"Recorded TF file: {tf_metadata['tf_filename']} -> {tf_file_id}")
+        logger.debug(f"Recorded TF file: {tf_metadata['tf_filename']} -> {tf_file_id}", extra=log_extra)
         return tf_file
         
     except Exception as e:
-        logger.error(f"Error recording TF file {tf_metadata['tf_filename']}: {e}")
+        logger.error(f"Error recording TF file {tf_metadata['tf_filename']}: {e}", extra=log_extra)
         return {}
 
 
-def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.Logger) -> Dict[str, Any]:
+def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.Logger, run_id=None) -> Dict[str, Any]:
     """
     Update the status of a TF file (FastMonFile) in the database using REST API.
 
@@ -197,20 +202,22 @@ def update_tf_file_status(tf_file_id: str, status: str, agent, logger: logging.L
         status: New status value (see FileStatus)
         agent: BaseAgent instance for API access
         logger: Logger instance
+        run_id: Run the file belongs to (for log attribution only)
 
     Returns:
         Updated FastMonFile data dictionary, or empty dict if failed
     """
+    log_extra = {'run_id': run_id} if run_id else {}
     if not tf_file_id or tf_file_id == 'unknown':
-        logger.error(f"Cannot update TF file status: missing tf_file_id (status={status})")
+        logger.error(f"Cannot update TF file status: missing tf_file_id (status={status})", extra=log_extra)
         return {}
 
     try:
         result = agent.call_monitor_api('PATCH', f'/fastmon-files/{tf_file_id}/', {'status': status})
-        logger.debug(f"Updated TF file status to {status}", extra={'tf_file_id': tf_file_id, 'status': status})
+        logger.debug(f"Updated TF file status to {status}", extra={**log_extra, 'tf_file_id': tf_file_id, 'status': status})
         return result
     except Exception as e:
-        logger.error(f"Error updating TF file status for {tf_file_id}: {e}")
+        logger.error(f"Error updating TF file status for {tf_file_id}: {e}", extra=log_extra)
         return {}
 
 
@@ -259,7 +266,7 @@ def check_run_terminated(run_id, agent, logger: logging.Logger) -> bool:
     try:
         fastmon_files = agent.call_monitor_api('GET', f'/fastmon-files/?run_id={run_id}')
     except Exception as e:
-        logger.error(f"Error fetching FastMonFiles for run_id={run_id}: {e}")
+        logger.error(f"Error fetching FastMonFiles for run_id={run_id}: {e}", extra={'run_id': run_id})
         return False
 
     if not fastmon_files:
