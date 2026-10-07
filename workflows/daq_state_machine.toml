@@ -18,3 +18,7 @@ stf_generation_time = 0.1       # Time to generate each STF (seconds)
 physics_period_duration = 10    # Duration of each physics period (seconds)
 physics_period_count = 2        # Number of physics periods (0 = infinite)
 standby_duration = 2            # Standby time between physics periods (seconds)
+
+stf_count = 1000                # Number of TFs per STF
+events_per_tf = 45              # Number of events per TF
+processing_time_per_event = 1.5 # Seconds to process one event for one core

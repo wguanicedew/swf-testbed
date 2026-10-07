@@ -109,6 +109,7 @@ class FastProcessingAgent(BaseAgent):
         # Default configuration
         self.config = {
             "stf_sampling_rate": 0.1,  # 10% of files
+            "selection_fraction": 1.0,  # Fraction of TFs sampled from each selected STF file
             # TF simulation parameters
             "tf_files_per_stf": 7,  # Number of TF files to generate per STF
             "tf_count_per_stf": 1000,  # Default total TF count per STF if not provided in stf_ready message
@@ -523,9 +524,24 @@ class FastProcessingAgent(BaseAgent):
         tfs_per_slice = fast_processing.get('tfs_per_slice', self.config.get('tfs_per_slice', 4))
         slices_per_sample = math.ceil(tfs_per_subsample / tfs_per_slice)
 
+        cores_per_worker = fast_processing.get('cores_per_worker', self.config.get('cores_per_worker', 1))
+        target_worker_count = fast_processing.get('target_worker_count', self.config.get('target_worker_count', 0))
+        if not target_worker_count:
+            try:
+                target_worker_count = fast_processing_utils.estimate_worker_count(
+                    workflow_params.get('daq_state_machine', {}),
+                    {**fast_processing, 'cores_per_worker': cores_per_worker},
+                    self.logger
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to estimate worker count, falling back to 1: {e}",
+                                  extra=self._msg_log_extra(message_data, error=str(e)))
+                target_worker_count = 1
+
         self._log_system_event('run_imminent', {
             'execution_id': execution_id,
-            'target_worker_count': fast_processing.get('target_worker_count', self.config.get('target_worker_count', 0)),
+            'target_worker_count': target_worker_count,
+            'cores_per_worker': cores_per_worker,
             'stf_sampling_rate': fast_processing.get('stf_sampling_rate', 0),
             'slices_per_sample': slices_per_sample,
             'no_duplicate_mode': fast_processing.get('no_duplicate_mode', False)
@@ -537,10 +553,10 @@ class FastProcessingAgent(BaseAgent):
             # Put the incoming message_data inside 'content' and add execution_id
             # and target_worker_count so workers know how many to spin up.
             content = dict(message_data or {})
-            target_worker_count = fast_processing.get('target_worker_count', self.config.get('target_worker_count', 1))
             content.update({
                 'execution_id': execution_id,
-                'core_count': target_worker_count,
+                'core_count': cores_per_worker * target_worker_count,
+                'cores_per_worker': cores_per_worker,
                 'memory_per_core': fast_processing.get('memory_per_core', self.config.get('memory_per_core', 4000)),
                 'target_worker_count': target_worker_count,
                 'slice_processing_time': fast_processing.get('slice_processing_time', self.config.get('slice_processing_time', 1)),

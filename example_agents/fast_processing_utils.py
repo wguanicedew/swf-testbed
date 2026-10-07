@@ -5,6 +5,7 @@ Utility functions for the Fast processing Agent.
 """
 
 import logging
+import math
 import hashlib
 import random
 import re
@@ -148,9 +149,11 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
     """
     Simulate creation of Time Frame (TF) subsamples from a Super Time Frame (STF) file.
 
-    Every STF file is sampled. The total TFs to sample is tf_count * stf_sampling_rate,
-    selected at random with a granularity of tfs_per_subsample: the STF yields
-    n_files = round(tf_count * stf_sampling_rate / tfs_per_subsample) subsamples, each a
+    Sampling has two levels:
+      - stf_sampling_rate: probability that an STF file is selected for sampling.
+      - selection_fraction: fraction of the TFs of a selected STF that are sampled.
+    The TFs are selected at random with a granularity of tfs_per_subsample: the STF yields
+    n_files = round(tf_count * selection_fraction / tfs_per_subsample) subsamples, each a
     block of tfs_per_subsample contiguous TFs. Block positions are drawn uniformly at
     random over the STF range, without overlaps.
 
@@ -160,7 +163,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
         config: Configuration dictionary
         logger: Logger instance
         agent_name: Name of the agent creating the subsamples
-        force_sample: Produce at least one subsample even if the sampling rate rounds to zero
+        force_sample: Always select the STF file and produce at least one subsample
 
     Returns:
         List of TF metadata dictionaries, ordered by tf_first
@@ -170,6 +173,11 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
     log_extra = {'run_id': run_id} if run_id else {}
     try:
         stf_sampling_rate = fast_processing.get("stf_sampling_rate", config.get("stf_sampling_rate", 1.0))
+        if not force_sample and random.random() >= stf_sampling_rate:
+            logger.debug(f"STF file skipped by stf_sampling_rate={stf_sampling_rate}", extra=log_extra)
+            return []
+
+        selection_fraction = fast_processing.get("selection_fraction", config.get("selection_fraction", 1.0))
         tfs_per_subsample = fast_processing.get("tfs_per_subsample", config.get("tfs_per_subsample", 20))
         tf_sequence_start = fast_processing.get("tf_sequence_start", config.get("tf_sequence_start", 1))
 
@@ -180,11 +188,11 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
             return []
 
         max_files = tf_count // subsample_size
-        n_files = min(max_files, round(tf_count * stf_sampling_rate / subsample_size))
+        n_files = min(max_files, round(tf_count * selection_fraction / subsample_size))
         if force_sample:
             n_files = max(1, n_files)
         if n_files <= 0:
-            logger.debug(f"STF file skipped: stf_sampling_rate={stf_sampling_rate}, tf_count={tf_count} "
+            logger.debug(f"STF file skipped: selection_fraction={selection_fraction}, tf_count={tf_count} "
                          f"too small for tfs_per_subsample={tfs_per_subsample}", extra=log_extra)
             return []
 
@@ -197,7 +205,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
 
         logger.info(
             f"Simulating TF subsamples for {stf_file.get('filename')}: "
-            f"stf_tf_count={tf_count}, stf_sampling_rate={stf_sampling_rate}, "
+            f"stf_tf_count={tf_count}, selection_fraction={selection_fraction}, "
             f"tfs_per_subsample={tfs_per_subsample} -> n_files={n_files}",
             extra=log_extra
         )
@@ -224,6 +232,7 @@ def simulate_tf_subsamples(stf_file: Dict[str, Any], fast_processing: dict, conf
                     "simulation": True,
                     "created_from": stf_file.get('filename'),
                     "stf_sampling_rate": stf_sampling_rate,
+                    "selection_fraction": selection_fraction,
                     "tfs_per_subsample": tfs_per_subsample,
                     "agent_name": agent_name,
                     "state": stf_file.get('state'),
@@ -345,6 +354,49 @@ def resolve_epic_params(fast_processing: dict, config: dict, logger: logging.Log
     processor_type = _none_or(fast_processing.get('processor_type', config.get('processor_type', None)))
 
     return epic_image, epic_version, processor_type
+
+
+def estimate_worker_count(daq_state_machine: dict, fast_processing: dict, logger: logging.Logger) -> int:
+    """
+    Estimate the number of workers needed to keep up with sampled DAQ data.
+
+    events/s       = (1 / stf_interval) * stf_count * events_per_tf
+    cores (all)    = events/s * processing_time_per_event
+    cores (sample) = cores (all) * stf_sampling_rate * selection_fraction
+    workers        = ceil(cores (sample) / cores_per_worker)
+
+    Args:
+        daq_state_machine: [daq_state_machine] workflow params (stf_interval,
+            stf_count, events_per_tf, processing_time_per_event)
+        fast_processing: [fast_processing] workflow params (stf_sampling_rate,
+            selection_fraction, cores_per_worker)
+        logger: Logger instance
+
+    Returns:
+        Estimated number of workers (at least 1)
+    """
+    stf_interval = float(daq_state_machine.get('stf_interval', 2.0))
+    stf_count = int(daq_state_machine.get('stf_count', 1000))
+    events_per_tf = float(daq_state_machine.get('events_per_tf', 45))
+    processing_time_per_event = float(daq_state_machine.get('processing_time_per_event', 1.5))
+
+    stf_sampling_rate = float(fast_processing.get('stf_sampling_rate', 1.0))
+    selection_fraction = float(fast_processing.get('selection_fraction', 1.0))
+    cores_per_worker = int(fast_processing.get('cores_per_worker', 1))
+
+    if stf_interval <= 0 or cores_per_worker <= 0:
+        raise ValueError(f"stf_interval ({stf_interval}) and cores_per_worker ({cores_per_worker}) must be positive")
+
+    events_per_second = stf_count * events_per_tf / stf_interval
+    cores_all = events_per_second * processing_time_per_event
+    cores_sampled = cores_all * stf_sampling_rate * selection_fraction
+    worker_count = max(1, math.ceil(cores_sampled / cores_per_worker))
+
+    logger.info(f"Estimated workers: {worker_count} (events/s={events_per_second:.1f}, cores_all={cores_all:.1f}, "
+                f"cores_sampled={cores_sampled:.1f}, cores_per_worker={cores_per_worker})",
+                extra={'events_per_second': events_per_second, 'cores_all': cores_all,
+                       'cores_sampled': cores_sampled, 'worker_count': worker_count})
+    return worker_count
 
 
 def check_run_terminated(run_id, agent, logger: logging.Logger) -> bool:
