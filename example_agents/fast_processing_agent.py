@@ -1250,8 +1250,26 @@ class FastProcessingAgent(BaseAgent):
                 tf_file_id = origin_message.get('tf_file_id')
                 tf_slice_id = origin_message.get('tf_slice_id')
 
+            # Fallback for worker payloads that report identifiers directly
+            # in content (without nesting under origin_message).
+            if isinstance(content, dict):
+                if slice_id is None:
+                    slice_id = content.get('slice_id')
+                if tf_filename is None:
+                    tf_filename = content.get('tf_filename')
+                if tf_file_id is None:
+                    tf_file_id = content.get('tf_file_id')
+                if tf_slice_id is None:
+                    tf_slice_id = content.get('tf_slice_id')
+
+            # Last-resort fallback for non-standard envelopes.
+            if tf_slice_id is None and isinstance(message_data, dict):
+                tf_slice_id = message_data.get('tf_slice_id')
+
             if tf_slice_id is None:
-                self.logger.debug("No tf_slice_id in result, cannot update TFSlice record")
+                self.logger.debug(
+                    f"No tf_slice_id in result, cannot update TFSlice record (content_keys={list(content.keys()) if isinstance(content, dict) else 'n/a'})"
+                )
                 return
 
             # Determine the final state
