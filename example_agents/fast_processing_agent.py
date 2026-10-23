@@ -432,7 +432,13 @@ class FastProcessingAgent(BaseAgent):
                 self.handle_end_run(message_data)
             elif msg_type == 'slice_result':
                 # Offloaded: updates the TFSlice record via a blocking REST call.
-                self.logger.info(f"Received slice_result message (run_id={message_data.get('run_id')}, slice_id={message_data.get('slice_id')}): {message_data.get('filename') or 'unknown filename'}", extra=self._msg_log_extra(message_data))
+                content = message_data.get('content') if isinstance(message_data.get('content'), dict) else {}
+                self.logger.info(
+                    f"Received slice_result message (run_id={message_data.get('run_id')}, "
+                    f"slice_id={content.get('slice_id')}, tf_slice_id={content.get('tf_slice_id')}, "
+                    f"state={content.get('state')})",
+                    extra=self._msg_log_extra(message_data)
+                )
                 self.run_in_background(self.handle_slice_result, message_data, label='slice_result')
             elif msg_type == 'transformer_ready':
                 self.handle_transformer_ready(message_data)
@@ -861,9 +867,12 @@ class FastProcessingAgent(BaseAgent):
         content = message_data.get('content', {})
         result = content.get('result') if isinstance(content, dict) else None
 
+        error = result.get('error') if isinstance(result, dict) else None
         self.logger.info(
             f"Slice result received: run={message_data.get('run_id')}, "
-            f"state={content.get('state') if isinstance(content, dict) else 'unknown'}",
+            f"tf_slice_id={content.get('tf_slice_id') if isinstance(content, dict) else None}, "
+            f"state={content.get('state') if isinstance(content, dict) else 'unknown'}"
+            + (f", error={error}" if error else ""),
             extra=self._msg_log_extra(message_data)
         )
 
