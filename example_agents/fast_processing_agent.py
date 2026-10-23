@@ -1300,8 +1300,7 @@ class FastProcessingAgent(BaseAgent):
                 'result': payload_result,
                 'error': error,
                 'metadata': {
-                    'metrics': metrics,
-                    'payload_result': payload_result
+                    'metrics': metrics
                 }
             }
 
