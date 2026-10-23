@@ -1282,10 +1282,23 @@ class FastProcessingAgent(BaseAgent):
             else:
                 slice_status = 'failed'
 
+            # Error can be reported by the payload (inner result), by the
+            # worker wrapper (e.g. pilot/import failure, inner result is None),
+            # or directly in content.
+            error = None
+            if inner_result:
+                error = inner_result.get('error')
+            if not error and isinstance(result, dict):
+                error = result.get('error')
+            if not error and isinstance(content, dict):
+                error = content.get('error')
+
             # Build update payload
             update_data = {
                 'status': slice_status,
                 'completed_at': content.get('processed_at') or datetime.now().isoformat(),
+                'result': payload_result,
+                'error': error,
                 'metadata': {
                     'metrics': metrics,
                     'payload_result': payload_result
